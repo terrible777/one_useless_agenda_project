@@ -159,6 +159,14 @@
   gap: 7px;
 }
 
+.draftEditor {
+  --entry-bg: #fffbeb;
+  --entry-border: #f2c94c;
+  --entry-name: #854d0e;
+  --entry-text: #422006;
+  background: var(--entry-bg);
+}
+
 .entryEditor label {
   display: grid;
   gap: 5px;
@@ -197,9 +205,22 @@
   line-height: 1.5;
 }
 
-.manualGrid {
-  display: grid;
-  gap: 7px;
+.draftEditor .nameInput {
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.draftEditor .requirementTextarea {
+  min-height: 54px;
+  padding: 7px 8px;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.draftEditor .secondaryButton {
+  min-height: 34px;
+  font-size: 12px;
 }
 
 .savedEditForm {

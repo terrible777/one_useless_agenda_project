@@ -46,6 +46,40 @@
   color: var(--muted);
 }
 
+.syncMeta {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.syncMeta div {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border: 1px solid #e8edf3;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 7px 8px;
+}
+
+.syncMeta dt,
+.syncMeta dd {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.syncMeta dt {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.syncMeta dd {
+  margin: 0;
+  color: var(--text);
+  word-break: break-word;
+}
+
 .status {
   margin-top: 8px;
   color: var(--primary-strong);

@@ -6,6 +6,16 @@ import {
   type RequirementKind,
   saveRequirementText,
 } from "@/lib/requirementStorage";
+import {
+  recordCloudSyncFailure,
+  recordCloudSyncSuccess,
+} from "@/lib/cloudSyncStatus";
+import {
+  fetchCloudRequirement,
+  isRequirementCloudInitializedInStorage,
+  pushRequirementTextToCloud,
+  setRequirementCloudInitializedInStorage,
+} from "@/lib/requirementSyncClient";
 import styles from "./RequirementOrganizerModal.module.css";
 
 type RequirementOrganizerModalProps = {
@@ -206,6 +216,10 @@ function getApiErrorMessage(data: RequirementApiResponse) {
   return "AI 整理失败，请稍后重试";
 }
 
+function getCloudSyncErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "未知错误";
+}
+
 async function readRequirementResponse(response: Response) {
   const contentType = response.headers.get("content-type") ?? "";
 
@@ -274,14 +288,37 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     savedEditDraftRef.current = savedEditDraft;
   }, [savedEditDraft]);
 
-  function replaceSavedEntries(entries: RequirementEntry[], message = "已保存") {
+  async function syncSavedRequirementTextToCloud(text: string) {
+    try {
+      await pushRequirementTextToCloud(kind, text);
+      setRequirementCloudInitializedInStorage(kind, true);
+      recordCloudSyncSuccess();
+    } catch (syncError) {
+      const message = `云端同步失败，已保存在本地：${getCloudSyncErrorMessage(syncError)}`;
+
+      console.error(`${config.title}云端同步失败。`, syncError);
+      recordCloudSyncFailure(message);
+      setError(message);
+    }
+  }
+
+  function replaceSavedEntries(
+    entries: RequirementEntry[],
+    message = "已保存",
+    syncCloud = true,
+  ) {
     const normalizedEntries = parseRequirementEntries(entriesToText(entries), `saved-${kind}`);
+    const normalizedText = entriesToText(normalizedEntries);
 
     savedEntriesRef.current = normalizedEntries;
     setSavedEntries(normalizedEntries);
-    saveRequirementText(kind, entriesToText(normalizedEntries));
+    saveRequirementText(kind, normalizedText);
     setStatusMessage(message);
     setError("");
+
+    if (syncCloud) {
+      void syncSavedRequirementTextToCloud(normalizedText);
+    }
   }
 
   function replaceDraftEntries(entries: RequirementEntry[]) {
@@ -290,6 +327,44 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     draftEntriesRef.current = normalizedEntries;
     setDraftEntries(normalizedEntries);
   }
+
+  useEffect(() => {
+    async function pullSavedRequirementFromCloud() {
+      const localText = entriesToText(savedEntriesRef.current);
+
+      try {
+        const cloudRequirement = await fetchCloudRequirement(kind);
+        const hasInitialized = isRequirementCloudInitializedInStorage(kind);
+
+        if (
+          cloudRequirement.content.trim() ||
+          hasInitialized ||
+          !localText.trim()
+        ) {
+          replaceSavedEntries(
+            parseRequirementEntries(cloudRequirement.content, `saved-${kind}`),
+            cloudRequirement.content.trim() ? "已从云端同步" : "",
+            false,
+          );
+        } else {
+          await pushRequirementTextToCloud(kind, localText);
+        }
+
+        setRequirementCloudInitializedInStorage(kind, true);
+        recordCloudSyncSuccess();
+      } catch (syncError) {
+        const message = `云端同步失败，已保存在本地：${getCloudSyncErrorMessage(syncError)}`;
+
+        console.error(`${config.title}云端读取失败。`, syncError);
+        recordCloudSyncFailure(message);
+        setError(message);
+      }
+    }
+
+    void pullSavedRequirementFromCloud();
+    // 弹窗打开时拉取一次云端历史；保存、编辑、删除会分别主动同步。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
 
   function updateDraftEntry(entryId: string, nextEntry: Partial<RequirementEntry>) {
     setDraftEntries((currentEntries) => {
@@ -402,7 +477,9 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
       requirement,
     };
 
-    replaceSavedEntries([...savedEntriesRef.current, nextEntry], "已新增要求");
+    replaceDraftEntries([...draftEntriesRef.current, nextEntry]);
+    setStatusMessage("已加入本次整理结果，可编辑后保存");
+    setError("");
     setManualName("");
     setManualRequirement("");
   }
@@ -529,7 +606,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
       >
         <div className={styles.headingRow}>
           <div>
-            <p className={styles.label}>本地保存</p>
+            <p className={styles.label}>本地 + 云端</p>
             <h2 id="requirement-organizer-title">{config.title}</h2>
           </div>
           <button className={styles.closeButton} onClick={() => void handleCloseRequest()} type="button">
@@ -619,49 +696,50 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
 
           <section className={styles.section}>
             <div className={styles.sectionHeader}>
-              <h3>手动录入</h3>
-            </div>
-            <div className={styles.manualGrid}>
-              <input
-                className={styles.nameInput}
-                onChange={(event) => {
-                  setManualName(event.target.value);
-                  if (error) {
-                    setError("");
-                  }
-                }}
-                placeholder="教师姓名"
-                value={manualName}
-              />
-              <textarea
-                className={styles.requirementTextarea}
-                onChange={(event) => {
-                  setManualRequirement(event.target.value);
-                  if (error) {
-                    setError("");
-                  }
-                }}
-                placeholder="要求内容"
-                rows={2}
-                value={manualRequirement}
-              />
-              <button className={styles.secondaryButton} onClick={handleAddManualRequirement} type="button">
-                新增要求
-              </button>
-            </div>
-          </section>
-
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
               <h3>本次整理结果</h3>
               <span>{draftEntries.length > 0 ? `${draftEntries.length} 条待保存` : "未整理"}</span>
             </div>
+
+            <article className={`${styles.entryEditor} ${styles.draftEditor}`}>
+              <label>
+                <span>手动新增</span>
+                <input
+                  className={styles.nameInput}
+                  onChange={(event) => {
+                    setManualName(event.target.value);
+                    if (error) {
+                      setError("");
+                    }
+                  }}
+                  placeholder="教师姓名"
+                  value={manualName}
+                />
+              </label>
+              <label>
+                <span>要求内容</span>
+                <textarea
+                  className={styles.requirementTextarea}
+                  onChange={(event) => {
+                    setManualRequirement(event.target.value);
+                    if (error) {
+                      setError("");
+                    }
+                  }}
+                  placeholder="可直接输入要求，点击新增后进入本次整理结果"
+                  rows={2}
+                  value={manualRequirement}
+                />
+              </label>
+              <button className={styles.secondaryButton} onClick={handleAddManualRequirement} type="button">
+                新增要求
+              </button>
+            </article>
 
             {draftEntries.length > 0 ? (
               <div className={styles.entryList}>
                 {draftEntries.map((entry) => (
                   <article
-                    className={`${styles.entryEditor} ${getEntryToneClassName(entry.name)}`}
+                    className={`${styles.entryEditor} ${styles.draftEditor}`}
                     key={entry.id}
                   >
                     <label>
@@ -689,7 +767,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
                 ))}
               </div>
             ) : (
-              <p className={styles.emptyState}>新粘贴内容整理后会显示在这里。</p>
+              <p className={styles.emptyState}>AI 整理或手动新增后会显示在这里。</p>
             )}
           </section>
 
