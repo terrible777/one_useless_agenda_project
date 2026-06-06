@@ -1,6 +1,5 @@
 import "server-only";
 
-import { sortTasksByDeadline } from "@/lib/taskSorting";
 import type { Task, TaskStatus } from "@/types/task";
 
 type SupabaseTaskRow = {
@@ -102,7 +101,7 @@ function buildDeadlineAt(task: Pick<Task, "deadlineDate" | "deadlineTime">) {
   return `${task.deadlineDate}T${task.deadlineTime ?? "15:00"}:00+08:00`;
 }
 
-function taskToRow(task: Task, index: number): SupabaseTaskRow {
+function taskToRow(task: Task): SupabaseTaskRow {
   const now = new Date().toISOString();
 
   return {
@@ -114,7 +113,7 @@ function taskToRow(task: Task, index: number): SupabaseTaskRow {
     status: task.status,
     note: task.note,
     source_text: task.sourceText,
-    sort_order: typeof task.sortOrder === "number" ? task.sortOrder : index,
+    sort_order: typeof task.sortOrder === "number" ? task.sortOrder : null,
     created_at: task.createdAt ?? now,
     updated_at: task.updatedAt ?? now,
   };
@@ -149,7 +148,7 @@ export function getSupabaseSyncMode() {
 export async function listCloudTasks() {
   const { url } = getSupabaseConfig();
   const response = await fetch(
-    `${url}/rest/v1/tasks?select=*&order=deadline_at.asc.nullslast,sort_order.asc.nullslast,updated_at.desc`,
+    `${url}/rest/v1/tasks?select=*&order=sort_order.asc.nullslast,deadline_at.asc.nullslast,updated_at.desc`,
     {
       cache: "no-store",
       headers: getSupabaseHeaders(),
@@ -159,12 +158,12 @@ export async function listCloudTasks() {
   await assertSupabaseOk(response);
 
   const rows = (await response.json()) as SupabaseTaskRow[];
-  return sortTasksByDeadline(rows.map(rowToTask));
+  return rows.map(rowToTask);
 }
 
 export async function upsertCloudTasks(tasks: Task[]) {
   const { url } = getSupabaseConfig();
-  const rows = sortTasksByDeadline(tasks).map(taskToRow);
+  const rows = tasks.map(taskToRow);
 
   if (rows.length === 0) {
     return [];

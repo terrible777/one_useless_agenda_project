@@ -24,7 +24,6 @@ export function sortTasksByDeadline(tasks: Task[]) {
   return tasks
     .map((task, index) => ({
       index,
-      sortOrder: typeof task.sortOrder === "number" ? task.sortOrder : index,
       task,
       timestamp: getDeadlineTimestamp(task),
     }))
@@ -41,6 +40,19 @@ export function sortTasksByDeadline(tasks: Task[]) {
         return 1;
       }
 
+      return a.index - b.index;
+    })
+    .map(({ task }) => task);
+}
+
+export function sortTasksByManualOrder(tasks: Task[]) {
+  return tasks
+    .map((task, index) => ({
+      index,
+      sortOrder: typeof task.sortOrder === "number" ? task.sortOrder : Number.POSITIVE_INFINITY,
+      task,
+    }))
+    .sort((a, b) => {
       if (a.sortOrder !== b.sortOrder) {
         return a.sortOrder - b.sortOrder;
       }
@@ -48,4 +60,19 @@ export function sortTasksByDeadline(tasks: Task[]) {
       return a.index - b.index;
     })
     .map(({ task }) => task);
+}
+
+export function inferManualSortEnabled(tasks: Task[]) {
+  if (!tasks.some((task) => typeof task.sortOrder === "number")) {
+    return false;
+  }
+
+  const deadlineOrder = sortTasksByDeadline(tasks)
+    .map((task) => task.id)
+    .join("\u0000");
+  const manualOrder = sortTasksByManualOrder(tasks)
+    .map((task) => task.id)
+    .join("\u0000");
+
+  return deadlineOrder !== manualOrder;
 }

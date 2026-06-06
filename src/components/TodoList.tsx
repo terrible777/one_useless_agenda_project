@@ -6,7 +6,8 @@ import {
   closestCenter,
   DndContext,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   type DragEndEvent,
   useSensor,
   useSensors,
@@ -25,10 +26,12 @@ import { TaskEditForm } from "./TaskEditForm";
 import styles from "./TodoList.module.css";
 
 type TodoListProps = {
+  isManualSortEnabled: boolean;
   tasks: Task[];
   onChangeTaskStatus: (taskId: string, status: TaskStatus) => void;
   onDeleteTask: (taskId: string) => void;
   onReorderTasks: (tasks: Task[]) => void;
+  onRestoreDeadlineSort: () => void;
   onUpdateTask: (task: Task) => void;
 };
 
@@ -203,10 +206,12 @@ function SortableTodoItem({
 }
 
 export function TodoList({
+  isManualSortEnabled,
   tasks,
   onChangeTaskStatus,
   onDeleteTask,
   onReorderTasks,
+  onRestoreDeadlineSort,
   onUpdateTask,
 }: TodoListProps) {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -215,9 +220,15 @@ export function TodoList({
   const archivedTaskCount = tasks.filter((task) => task.status === "completed").length;
   const visibleTasks = getVisibleTasks(tasks, showArchivedTasks);
   const sensors = useSensors(
-    useSensor(PointerSensor, {
+    useSensor(MouseSensor, {
       activationConstraint: {
         distance: 8,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 120,
+        tolerance: 5,
       },
     }),
     useSensor(KeyboardSensor, {
@@ -271,6 +282,14 @@ export function TodoList({
           <span className={styles.count}>
             {visibleTasks.length} 项{archivedTaskCount > 0 ? ` / 归档 ${archivedTaskCount}` : ""}
           </span>
+          <button
+            className={styles.sortResetButton}
+            disabled={!isManualSortEnabled}
+            onClick={onRestoreDeadlineSort}
+            type="button"
+          >
+            恢复时间排序
+          </button>
           <button
             className={styles.archiveToggle}
             onClick={() => setShowArchivedTasks((currentValue) => !currentValue)}

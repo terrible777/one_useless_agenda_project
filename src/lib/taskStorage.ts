@@ -3,6 +3,7 @@ import { TASK_STATUSES } from "@/types/task";
 
 const STORAGE_KEY = "agenda_generate_tasks";
 const DIRTY_STORAGE_KEY = "agenda_generate_tasks_dirty";
+const MANUAL_SORT_STORAGE_KEY = "agenda_generate_tasks_manual_sort";
 
 function isTaskStatus(value: unknown): value is TaskStatus {
   return typeof value === "string" && TASK_STATUSES.includes(value as TaskStatus);
@@ -151,5 +152,39 @@ export function setTasksDirtyInStorage(isDirty: boolean) {
     localStorage.removeItem(DIRTY_STORAGE_KEY);
   } catch (error) {
     console.warn("Failed to update task sync dirty flag.", error);
+  }
+}
+
+export function isManualTaskSortEnabledInStorage() {
+  const localStorage = getLocalStorage();
+
+  if (!localStorage) {
+    return false;
+  }
+
+  try {
+    return localStorage.getItem(MANUAL_SORT_STORAGE_KEY) === "true";
+  } catch (error) {
+    console.warn("Failed to read task manual sort flag.", error);
+    return false;
+  }
+}
+
+export function setManualTaskSortEnabledInStorage(isEnabled: boolean) {
+  const localStorage = getLocalStorage();
+
+  if (!localStorage) {
+    return;
+  }
+
+  try {
+    if (isEnabled) {
+      localStorage.setItem(MANUAL_SORT_STORAGE_KEY, "true");
+      return;
+    }
+
+    localStorage.removeItem(MANUAL_SORT_STORAGE_KEY);
+  } catch (error) {
+    console.warn("Failed to update task manual sort flag.", error);
   }
 }

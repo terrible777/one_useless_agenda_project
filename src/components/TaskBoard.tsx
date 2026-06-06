@@ -3,11 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import {
   areTasksMarkedDirtyInStorage,
+  isManualTaskSortEnabledInStorage,
   loadTasksFromStorage,
   saveTasksToStorage,
+  setManualTaskSortEnabledInStorage,
   setTasksDirtyInStorage,
 } from "@/lib/taskStorage";
-import { sortTasksByDeadline } from "@/lib/taskSorting";
+import {
+  inferManualSortEnabled,
+  sortTasksByDeadline,
+  sortTasksByManualOrder,
+} from "@/lib/taskSorting";
 import {
   clearCloudTasksFromClient,
   deleteCloudTaskFromClient,
@@ -64,23 +70,30 @@ function touchTask(task: Task) {
   };
 }
 
-function normalizeTaskList(tasks: Task[]) {
+function normalizeTaskList(tasks: Task[], isManualSortEnabled: boolean) {
   const now = new Date().toISOString();
 
-  const normalizedTasks = tasks.map((task, index) => ({
+  const normalizedTasks = tasks.map((task) => ({
     ...task,
     title: task.title.trim(),
     deadlineAt: task.deadlineAt ?? buildDeadlineAt(task),
     note: task.note.trim(),
     sourceText: task.sourceText.trim(),
-    sortOrder: typeof task.sortOrder === "number" ? task.sortOrder : index,
+    sortOrder: typeof task.sortOrder === "number" ? task.sortOrder : undefined,
     createdAt: task.createdAt ?? now,
     updatedAt: task.updatedAt ?? now,
   }));
 
-  return sortTasksByDeadline(normalizedTasks).map((task, index) => ({
+  if (isManualSortEnabled) {
+    return sortTasksByManualOrder(normalizedTasks).map((task, index) => ({
+      ...task,
+      sortOrder: index,
+    }));
+  }
+
+  return sortTasksByDeadline(normalizedTasks).map((task) => ({
     ...task,
-    sortOrder: index,
+    sortOrder: undefined,
   }));
 }
 
@@ -110,10 +123,12 @@ export function TaskBoard() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncFailureReason, setLastSyncFailureReason] = useState<string | null>(null);
   const [lastSyncSuccessAt, setLastSyncSuccessAt] = useState<string | null>(null);
+  const [isManualSortEnabled, setIsManualSortEnabled] = useState(false);
   const [activeRequirementKind, setActiveRequirementKind] = useState<RequirementKind | null>(null);
   const localRevisionRef = useRef(0);
   const savedTasksRef = useRef<Task[]>([]);
   const hasUnsyncedLocalChangesRef = useRef(false);
+  const isManualSortEnabledRef = useRef(false);
 
   function markLocalSyncPending() {
     hasUnsyncedLocalChangesRef.current = true;
@@ -136,14 +151,18 @@ export function TaskBoard() {
   useEffect(() => {
     let isMounted = true;
 
-    function applyTasks(tasks: Task[]) {
-      const nextTasks = normalizeTaskList(tasks);
+    function applyTasks(tasks: Task[], manualSortEnabled: boolean) {
+      const nextManualSortEnabled = manualSortEnabled && tasks.length > 0;
+      const nextTasks = normalizeTaskList(tasks, nextManualSortEnabled);
 
       savedTasksRef.current = nextTasks;
+      isManualSortEnabledRef.current = nextManualSortEnabled;
       saveTasksToStorage(nextTasks);
+      setManualTaskSortEnabledInStorage(nextManualSortEnabled);
 
       if (isMounted) {
         setSavedTasks(nextTasks);
+        setIsManualSortEnabled(nextManualSortEnabled);
       }
 
       return nextTasks;
@@ -190,12 +209,12 @@ export function TaskBoard() {
         }
 
         if (cloudTasks.length > 0) {
-          applyTasks(cloudTasks);
+          applyTasks(cloudTasks, inferManualSortEnabled(cloudTasks));
           markEffectSyncSuccess();
           return;
         }
 
-        applyTasks([]);
+        applyTasks([], false);
         markEffectSyncSuccess();
       } catch (error) {
         markEffectSyncFailure(error);
@@ -208,7 +227,7 @@ export function TaskBoard() {
 
     const timeoutId = window.setTimeout(() => {
       hasUnsyncedLocalChangesRef.current = areTasksMarkedDirtyInStorage();
-      applyTasks(loadTasksFromStorage());
+      applyTasks(loadTasksFromStorage(), isManualTaskSortEnabledInStorage());
       void pullCloudTasks();
     }, 0);
 
@@ -242,24 +261,31 @@ export function TaskBoard() {
     console.error(reason, error);
   }
 
-  function applySavedTasks(tasks: Task[]) {
-    const nextTasks = normalizeTaskList(tasks);
+  function applySavedTasks(tasks: Task[], manualSortEnabled = isManualSortEnabledRef.current) {
+    const nextManualSortEnabled = manualSortEnabled && tasks.length > 0;
+    const nextTasks = normalizeTaskList(tasks, nextManualSortEnabled);
 
     savedTasksRef.current = nextTasks;
+    isManualSortEnabledRef.current = nextManualSortEnabled;
     setSavedTasks(nextTasks);
+    setIsManualSortEnabled(nextManualSortEnabled);
     saveTasksToStorage(nextTasks);
+    setManualTaskSortEnabledInStorage(nextManualSortEnabled);
 
     return nextTasks;
   }
 
-  function commitSavedTasks(updater: Task[] | ((currentTasks: Task[]) => Task[])) {
+  function commitSavedTasks(
+    updater: Task[] | ((currentTasks: Task[]) => Task[]),
+    manualSortEnabled = isManualSortEnabledRef.current,
+  ) {
     const nextTasks =
       typeof updater === "function" ? updater(savedTasksRef.current) : updater;
 
     localRevisionRef.current += 1;
     markLocalSyncPending();
 
-    return applySavedTasks(nextTasks);
+    return applySavedTasks(nextTasks, manualSortEnabled);
   }
 
   async function syncAllTasksToCloud(tasks: Task[], expectedRevision = localRevisionRef.current) {
@@ -297,12 +323,12 @@ export function TaskBoard() {
       }
 
       if (cloudTasks.length > 0) {
-        applySavedTasks(cloudTasks);
+        applySavedTasks(cloudTasks, inferManualSortEnabled(cloudTasks));
         markSyncSuccess();
         return;
       }
 
-      applySavedTasks([]);
+      applySavedTasks([], false);
       markSyncSuccess();
     } catch (error) {
       markSyncFailure(error);
@@ -349,8 +375,15 @@ export function TaskBoard() {
       title,
       note: taskToSave.note.trim(),
       sourceText: taskToSave.sourceText.trim(),
+      sortOrder: isManualSortEnabledRef.current ? savedTasksRef.current.length : undefined,
     });
-    const nextTasks = commitSavedTasks((currentTasks) => [normalizedTask, ...currentTasks]);
+    const nextTasks = commitSavedTasks(
+      (currentTasks) =>
+        isManualSortEnabledRef.current
+          ? [...currentTasks, normalizedTask]
+          : [normalizedTask, ...currentTasks],
+      isManualSortEnabledRef.current,
+    );
 
     setPendingTasks((currentTasks) => currentTasks.filter((task) => task.id !== taskToSave.id));
     setInputClearSignal((currentSignal) => currentSignal + 1);
@@ -411,11 +444,29 @@ export function TaskBoard() {
   }
 
   function handleReorderSavedTasks(reorderedTasks: Task[]) {
+    const now = new Date().toISOString();
     const nextTasks = commitSavedTasks(
       reorderedTasks.map((task, index) => ({
         ...task,
         sortOrder: index,
+        updatedAt: now,
       })),
+      true,
+    );
+
+    void syncAllTasksToCloud(nextTasks);
+  }
+
+  function handleRestoreDeadlineSort() {
+    const now = new Date().toISOString();
+    const nextTasks = commitSavedTasks(
+      (currentTasks) =>
+        currentTasks.map((task) => ({
+          ...task,
+          sortOrder: undefined,
+          updatedAt: now,
+        })),
+      false,
     );
 
     void syncAllTasksToCloud(nextTasks);
@@ -427,7 +478,9 @@ export function TaskBoard() {
         onChangeTaskStatus={handleChangeSavedTaskStatus}
         onDeleteTask={handleDeleteSavedTask}
         onReorderTasks={handleReorderSavedTasks}
+        onRestoreDeadlineSort={handleRestoreDeadlineSort}
         onUpdateTask={handleUpdateSavedTask}
+        isManualSortEnabled={isManualSortEnabled}
         tasks={savedTasks}
       />
       <RequirementTools onOpen={setActiveRequirementKind} />
