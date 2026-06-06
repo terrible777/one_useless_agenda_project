@@ -59,21 +59,21 @@ export function PendingTaskCard({ task, onCancel, onChange, onSave }: PendingTas
             value={task.deadlineTime ?? ""}
           />
         </label>
-      </div>
 
-      <label className={styles.field}>
-        <span>状态</span>
-        <select
-          onChange={(event) => updateTask({ status: event.target.value as TaskStatus })}
-          value={task.status}
-        >
-          {TASK_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {TASK_STATUS_LABELS[status]}
-            </option>
-          ))}
-        </select>
-      </label>
+        <label className={styles.field}>
+          <span>状态</span>
+          <select
+            onChange={(event) => updateTask({ status: event.target.value as TaskStatus })}
+            value={task.status}
+          >
+            {TASK_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {TASK_STATUS_LABELS[status]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       <label className={styles.field}>
         <span>备注</span>

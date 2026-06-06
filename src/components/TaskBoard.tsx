@@ -81,8 +81,8 @@ function formatSyncTime() {
 }
 
 function getSyncFailureReason(error: unknown) {
-  if (error instanceof TaskSyncError && error.kind === "not_configured") {
-    return "云端同步尚未配置";
+  if (error instanceof TaskSyncError) {
+    return error.message;
   }
 
   return SYNC_FAILURE_MESSAGE;

@@ -35,21 +35,9 @@ Supabase tasks 表
 
 ## 本地开发
 
-安装依赖：
-
 ```bash
 npm install
-```
-
-复制环境变量模板：
-
-```bash
 copy .env.example .env.local
-```
-
-启动开发服务器：
-
-```bash
 npm run dev
 ```
 
@@ -71,12 +59,15 @@ NEXT_PUBLIC_USE_MOCK_AI=false
 
 NEXT_PUBLIC_SUPABASE_URL=你的 Supabase Project URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY=你的 Supabase anon key
+SUPABASE_SERVICE_ROLE_KEY=你的 Supabase service_role key
 ```
 
 说明：
 
 - `DEEPSEEK_API_KEY` 只在服务端读取，不会暴露到前端。
-- `NEXT_PUBLIC_SUPABASE_URL` 和 `NEXT_PUBLIC_SUPABASE_ANON_KEY` 用于 Next.js API Route 访问 Supabase。
+- `NEXT_PUBLIC_SUPABASE_URL` 和 `NEXT_PUBLIC_SUPABASE_ANON_KEY` 用于基础 Supabase 配置。
+- `SUPABASE_SERVICE_ROLE_KEY` 只在服务端读取，不能以 `NEXT_PUBLIC_` 开头，也不能写入前端代码。
+- 服务端写任务时优先使用 `SUPABASE_SERVICE_ROLE_KEY`，避免 anon key 被 RLS 或权限限制导致“能读但不能写”。
 - 当前版本不需要同步密钥，不需要登录，不需要注册。
 - 修改 `.env.local` 后需要重启 `npm run dev`。
 
@@ -103,8 +94,6 @@ create table if not exists public.tasks (
 
 create index if not exists tasks_sort_order_idx
   on public.tasks (sort_order);
-
-alter table public.tasks disable row level security;
 ```
 
 当前项目只给单用户使用，不做 Supabase Auth、多用户、注册或登录。部署地址本身请妥善保管。
@@ -122,7 +111,7 @@ alter table public.tasks disable row level security;
 - 删除任务后自动 `DELETE /api/tasks?id=xxx`。
 - 页面重新获得焦点或从后台回到前台时，会再次尝试拉取云端任务。
 - 同步失败不会影响本地使用；任务会保存在 localStorage。
-- 同步失败时页面会显示：`云端同步失败，已保存在本地`。
+- 同步失败时页面会显示具体错误，例如 `云端同步失败：POST /api/tasks 返回 502：...`。
 
 为什么电脑和手机会自动同步：
 
@@ -149,18 +138,10 @@ Mock 模式不会请求 `/api/analyze`，也不会调用 DeepSeek。
 
 ## 生产构建
 
-本地检查生产构建：
-
 ```bash
 npm run lint
 npm run build
 npm run start
-```
-
-访问：
-
-```text
-http://localhost:3000
 ```
 
 ## Vercel 部署
@@ -184,23 +165,34 @@ NEXT_PUBLIC_USE_MOCK_AI=false
 
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
 ```
 
 6. Deploy。
 
-部署后不需要运行 `npm run dev`。原因是：
+部署后不需要运行 `npm run dev`。`npm run dev` 只用于本地开发；Vercel 会自动运行 `npm run build`，并托管页面、PWA 静态资源和 Next.js Serverless API Routes。
 
-- `npm run dev` 只用于本地开发。
-- Vercel 会在部署时运行 `npm run build`。
-- 部署完成后，Vercel 自动托管静态页面、PWA 资源和 Next.js Serverless API Routes。
-- `/api/analyze`、`/api/tasks`、`/api/tasks/clear` 都会在 Vercel Serverless 环境中按需运行。
+## 验证云端写入
+
+1. 打开页面新增一个任务。
+2. 访问：
+
+```text
+https://你的域名/api/tasks
+```
+
+3. 应该能看到新增任务。
+4. 编辑任务后再次访问 `/api/tasks`，应能看到更新后的字段。
+5. 删除任务后再次访问 `/api/tasks`，该任务应消失。
+
+如果页面同步状态面板显示 `POST /api/tasks 返回 502`，优先检查 Vercel 是否配置了 `SUPABASE_SERVICE_ROLE_KEY`。
 
 ## Vercel 兼容性说明
 
 - `/api/analyze` 只从 `process.env` 读取 DeepSeek 环境变量，适合 Vercel Serverless。
 - `/api/tasks` 和 `/api/tasks/clear` 只从 `process.env` 读取 Supabase 环境变量，适合 Vercel Serverless。
 - 所有 API Route 都不依赖本地终端或本地文件写入。
-- DeepSeek API Key 不会进入前端 bundle。
+- DeepSeek API Key 和 Supabase service role key 不会进入前端 bundle。
 - Supabase 请求由服务端 API Route 发起。
 
 ## PWA 检查
@@ -220,7 +212,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 navigator.serviceWorker.register("/sw.js");
 ```
 
-这些文件都位于 `public/`，部署到 Vercel 后会从站点根路径访问，不存在额外路径前缀问题。
+这些文件都位于 `public/`，部署到 Vercel 后会从站点根路径访问。
 
 ## 安卓 Chrome 安装 PWA
 
@@ -229,13 +221,6 @@ navigator.serviceWorker.register("/sw.js");
 3. 打开 Chrome 菜单。
 4. 点击“安装应用”或“添加到主屏幕”。
 5. 从主屏幕打开应用，确认它以独立窗口运行。
-
-如果没有看到安装入口，请检查：
-
-- 是否通过 HTTPS 访问。
-- `/manifest.json` 是否可访问。
-- `/sw.js` 是否注册成功。
-- 图标路径是否可访问。
 
 ## 当前同步方案局限
 

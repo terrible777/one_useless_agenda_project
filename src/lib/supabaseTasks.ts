@@ -16,9 +16,15 @@ type SupabaseTaskRow = {
   updated_at: string;
 };
 
+type SupabaseConfig = {
+  key: string;
+  url: string;
+  usesServiceRole: boolean;
+};
+
 export class SupabaseConfigError extends Error {
   constructor() {
-    super("Supabase environment variables are missing.");
+    super("Missing Supabase environment variables.");
     this.name = "SupabaseConfigError";
   }
 }
@@ -35,26 +41,29 @@ export class SupabaseRequestError extends Error {
   }
 }
 
-function getSupabaseConfig() {
+function getSupabaseConfig(): SupabaseConfig {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key = serviceRoleKey || anonKey;
 
-  if (!url || !anonKey) {
+  if (!url || !key) {
     throw new SupabaseConfigError();
   }
 
   return {
-    anonKey,
+    key,
     url: url.replace(/\/+$/, ""),
+    usesServiceRole: Boolean(serviceRoleKey),
   };
 }
 
 function getSupabaseHeaders(extraHeaders: Record<string, string> = {}) {
-  const { anonKey } = getSupabaseConfig();
+  const { key } = getSupabaseConfig();
 
   return {
-    apikey: anonKey,
-    Authorization: `Bearer ${anonKey}`,
+    apikey: key,
+    Authorization: `Bearer ${key}`,
     "Content-Type": "application/json",
     ...extraHeaders,
   };
@@ -67,10 +76,12 @@ function isTaskStatus(value: string): value is TaskStatus {
 function sanitizeSupabaseError(text: string) {
   return text
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/("api[_-]?key"\s*:\s*")[^"]+(")/gi, "$1[redacted]$2")
     .replace(/("apikey"\s*:\s*")[^"]+(")/gi, "$1[redacted]$2")
+    .replace(/(api[_-]?key=)[^&\s]+/gi, "$1[redacted]")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 400);
+    .slice(0, 500);
 }
 
 async function readSafeErrorSummary(response: Response) {
@@ -128,6 +139,10 @@ async function assertSupabaseOk(response: Response) {
   if (!response.ok) {
     throw new SupabaseRequestError(response.status, await readSafeErrorSummary(response));
   }
+}
+
+export function getSupabaseSyncMode() {
+  return getSupabaseConfig().usesServiceRole ? "service_role" : "anon";
 }
 
 export async function listCloudTasks() {

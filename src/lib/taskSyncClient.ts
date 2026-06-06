@@ -31,7 +31,7 @@ function getErrorMessage(data: ApiError) {
   return "云端同步失败";
 }
 
-async function readJsonResponse(response: Response) {
+async function readResponseBody(response: Response) {
   const contentType = response.headers.get("content-type") ?? "";
 
   if (!contentType.includes("application/json")) {
@@ -42,20 +42,23 @@ async function readJsonResponse(response: Response) {
   return (await response.json()) as unknown;
 }
 
-function createSyncError(response: Response, data: unknown) {
+function createSyncError(method: string, path: string, response: Response, data: unknown) {
   const message =
     !Array.isArray(data) && typeof data === "object" && data !== null
       ? getErrorMessage(data as ApiError)
       : "云端同步失败";
+  const detail = `云端同步失败：${method} ${path} 返回 ${response.status}：${message}`;
 
   if (response.status === 503 || message.includes("尚未配置")) {
-    return new TaskSyncError("云端同步尚未配置", "not_configured", response.status);
+    return new TaskSyncError(detail, "not_configured", response.status);
   }
 
-  return new TaskSyncError(message, "unknown", response.status);
+  return new TaskSyncError(detail, "unknown", response.status);
 }
 
 async function requestJson<T>(path: string, init: RequestInit = {}) {
+  const method = init.method ?? "GET";
+
   try {
     const response = await fetch(path, {
       ...init,
@@ -64,10 +67,10 @@ async function requestJson<T>(path: string, init: RequestInit = {}) {
         ...init.headers,
       },
     });
-    const data = await readJsonResponse(response);
+    const data = await readResponseBody(response);
 
     if (!response.ok) {
-      throw createSyncError(response, data);
+      throw createSyncError(method, path, response, data);
     }
 
     return data as T;
@@ -76,7 +79,11 @@ async function requestJson<T>(path: string, init: RequestInit = {}) {
       throw error;
     }
 
-    throw new TaskSyncError("云端同步失败，已保存在本地。", "network");
+    const message = error instanceof Error ? error.message : "未知网络错误";
+    throw new TaskSyncError(
+      `云端同步失败：${method} ${path} 请求失败：${message}`,
+      "network",
+    );
   }
 }
 
@@ -95,6 +102,12 @@ export function upsertCloudTasksFromClient(tasks: Task[]) {
 
 export function deleteCloudTaskFromClient(taskId: string) {
   return requestJson<{ ok: true }>(`/api/tasks?id=${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function clearCloudTasksFromClient() {
+  return requestJson<{ ok: true }>("/api/tasks/clear", {
     method: "DELETE",
   });
 }

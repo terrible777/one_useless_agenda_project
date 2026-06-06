@@ -1,6 +1,10 @@
 .section {
   display: grid;
-  gap: 12px;
+  gap: 10px;
+  border: 1px solid #f2d98f;
+  border-radius: 8px;
+  background: #fff9e8;
+  padding: 12px;
 }
 
 .headingRow {
@@ -11,22 +15,22 @@
 }
 
 .label {
-  color: var(--primary);
-  font-size: 13px;
+  color: #9a6a00;
+  font-size: 12px;
   font-weight: 750;
 }
 
 .headingRow h2 {
-  margin-top: 3px;
-  font-size: 18px;
+  margin-top: 2px;
+  font-size: 16px;
   line-height: 1.35;
 }
 
 .count {
   min-height: 28px;
   border-radius: 999px;
-  background: var(--primary-soft);
-  color: var(--primary-strong);
+  background: #ffe9a8;
+  color: #7a4f00;
   padding: 5px 10px;
   font-size: 12px;
   font-weight: 750;
@@ -35,5 +39,5 @@
 
 .list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }

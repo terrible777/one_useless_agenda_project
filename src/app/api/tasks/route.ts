@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   deleteCloudTask,
+  getSupabaseSyncMode,
   listCloudTasks,
   SupabaseConfigError,
   SupabaseRequestError,
   upsertCloudTasks,
 } from "@/lib/supabaseTasks";
 import type { Task, TaskStatus } from "@/types/task";
+
+export const dynamic = "force-dynamic";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -77,28 +80,27 @@ function parseTaskBody(body: unknown) {
 
 function createErrorResponse(error: unknown) {
   if (error instanceof SupabaseConfigError) {
-    return NextResponse.json({ error: "云端同步尚未配置" }, { status: 503 });
+    console.error("Supabase task API is not configured.", error);
+    return NextResponse.json({ error: "云端同步尚未配置：缺少 Supabase 环境变量" }, { status: 503 });
   }
 
   if (error instanceof SupabaseRequestError) {
-    console.error("Supabase task sync failed.", {
+    console.error("Supabase task API failed.", {
       status: error.status,
       summary: error.summary,
     });
 
     return NextResponse.json(
-      { error: `Supabase 同步失败（${error.status}）：${error.summary}` },
+      { error: `Supabase 请求失败（${error.status}）：${error.summary}` },
       { status: 502 },
     );
   }
 
   console.error("Task sync API failed.", error);
-  return NextResponse.json({ error: "云端同步失败" }, { status: 500 });
+  return NextResponse.json({ error: "云端同步失败：任务 API 出错" }, { status: 500 });
 }
 
-export async function GET(request: NextRequest) {
-  void request;
-
+export async function GET() {
   try {
     return NextResponse.json(await listCloudTasks());
   } catch (error) {
@@ -115,6 +117,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "任务数据格式无效" }, { status: 400 });
     }
 
+    console.info("Upserting tasks to Supabase.", {
+      count: tasks.length,
+      mode: getSupabaseSyncMode(),
+    });
+
     return NextResponse.json(await upsertCloudTasks(tasks));
   } catch (error) {
     return createErrorResponse(error);
@@ -129,6 +136,11 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
+    console.info("Deleting task from Supabase.", {
+      mode: getSupabaseSyncMode(),
+      taskId,
+    });
+
     await deleteCloudTask(taskId);
     return NextResponse.json({ ok: true });
   } catch (error) {
