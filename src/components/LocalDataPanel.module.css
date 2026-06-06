@@ -1,0 +1,89 @@
+.card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.headingRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.headingRow h2 {
+  margin-top: 3px;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.badge {
+  border-radius: 999px;
+  background: #fff7d6;
+  color: #8a5a00;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.description,
+.status,
+.error {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.description {
+  color: var(--muted);
+}
+
+.status {
+  margin-top: 8px;
+  color: var(--primary-strong);
+}
+
+.error {
+  margin-top: 8px;
+  color: #b42318;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.primaryButton,
+.secondaryButton {
+  min-height: 40px;
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.primaryButton {
+  border: 1px solid transparent;
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.secondaryButton {
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--primary-strong);
+}
+
+.fileInput {
+  display: none;
+}

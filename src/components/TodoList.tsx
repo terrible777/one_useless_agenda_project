@@ -26,12 +26,10 @@ import { TaskEditForm } from "./TaskEditForm";
 import styles from "./TodoList.module.css";
 
 type TodoListProps = {
-  isManualSortEnabled: boolean;
   tasks: Task[];
   onChangeTaskStatus: (taskId: string, status: TaskStatus) => void;
   onDeleteTask: (taskId: string) => void;
   onReorderTasks: (tasks: Task[]) => void;
-  onRestoreDeadlineSort: () => void;
   onUpdateTask: (task: Task) => void;
 };
 
@@ -173,9 +171,6 @@ function SortableTodoItem({
             <button className={styles.editButton} onClick={onEdit} type="button">
               编辑
             </button>
-            <button className={styles.deleteButton} onClick={handleDelete} type="button">
-              删除
-            </button>
             <button
               {...attributes}
               {...listeners}
@@ -184,6 +179,9 @@ function SortableTodoItem({
               type="button"
             >
               拖动
+            </button>
+            <button className={styles.deleteButton} onClick={handleDelete} type="button">
+              删除
             </button>
           </div>
 
@@ -206,12 +204,10 @@ function SortableTodoItem({
 }
 
 export function TodoList({
-  isManualSortEnabled,
   tasks,
   onChangeTaskStatus,
   onDeleteTask,
   onReorderTasks,
-  onRestoreDeadlineSort,
   onUpdateTask,
 }: TodoListProps) {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -282,14 +278,6 @@ export function TodoList({
           <span className={styles.count}>
             {visibleTasks.length} 项{archivedTaskCount > 0 ? ` / 归档 ${archivedTaskCount}` : ""}
           </span>
-          <button
-            className={styles.sortResetButton}
-            disabled={!isManualSortEnabled}
-            onClick={onRestoreDeadlineSort}
-            type="button"
-          >
-            恢复时间排序
-          </button>
           <button
             className={styles.archiveToggle}
             onClick={() => setShowArchivedTasks((currentValue) => !currentValue)}

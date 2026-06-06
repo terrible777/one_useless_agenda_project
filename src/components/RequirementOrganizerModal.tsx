@@ -6,11 +6,6 @@ import {
   type RequirementKind,
   saveRequirementText,
 } from "@/lib/requirementStorage";
-import {
-  fetchCloudRequirement,
-  RequirementSyncError,
-  saveCloudRequirement,
-} from "@/lib/requirementSyncClient";
 import styles from "./RequirementOrganizerModal.module.css";
 
 type RequirementOrganizerModalProps = {
@@ -144,14 +139,13 @@ function parseRequirementEntries(text: string, prefix: string): RequirementEntry
 function entriesToText(entries: RequirementEntry[]) {
   return entries
     .map((entry) => {
-      const name = normalizeTeacherName(entry.name);
       const requirement = entry.requirement.trim();
 
       if (!requirement) {
         return "";
       }
 
-      return `${name}：${requirement}`;
+      return `${normalizeTeacherName(entry.name)}：${requirement}`;
     })
     .filter(Boolean)
     .join("\n");
@@ -178,20 +172,26 @@ function getEntryToneClassName(name: string) {
     0,
   );
 
-  switch (seed % 6) {
-    case 0:
-      return styles.entryTone0;
-    case 1:
-      return styles.entryTone1;
-    case 2:
-      return styles.entryTone2;
-    case 3:
-      return styles.entryTone3;
-    case 4:
-      return styles.entryTone4;
-    default:
-      return styles.entryTone5;
-  }
+  const toneIndex = seed % 15;
+  const toneClassNames = [
+    styles.entryTone0,
+    styles.entryTone1,
+    styles.entryTone2,
+    styles.entryTone3,
+    styles.entryTone4,
+    styles.entryTone5,
+    styles.entryTone6,
+    styles.entryTone7,
+    styles.entryTone8,
+    styles.entryTone9,
+    styles.entryTone10,
+    styles.entryTone11,
+    styles.entryTone12,
+    styles.entryTone13,
+    styles.entryTone14,
+  ];
+
+  return toneClassNames[toneIndex];
 }
 
 function getApiErrorMessage(data: RequirementApiResponse) {
@@ -238,21 +238,11 @@ async function requestRequirementOrganization(config: RequirementConfig, text: s
   return data.result.trim();
 }
 
-function getRequirementSyncErrorMessage(syncError: unknown) {
-  if (syncError instanceof RequirementSyncError) {
-    return syncError.message;
-  }
-
-  if (syncError instanceof Error) {
-    return `云端同步失败，已保存在本地：${syncError.message}`;
-  }
-
-  return "云端同步失败，已保存在本地";
-}
-
 export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganizerModalProps) {
   const config = REQUIREMENT_CONFIGS[kind];
   const [sourceText, setSourceText] = useState("");
+  const [manualName, setManualName] = useState("");
+  const [manualRequirement, setManualRequirement] = useState("");
   const [savedEntries, setSavedEntries] = useState<RequirementEntry[]>(() =>
     parseRequirementEntries(loadRequirementText(kind), `saved-${kind}`),
   );
@@ -260,14 +250,12 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
   const [editingSavedEntryId, setEditingSavedEntryId] = useState<string | null>(null);
   const [savedEditDraft, setSavedEditDraft] = useState<RequirementEntry | null>(null);
   const onCloseRef = useRef(onClose);
   const savedEntriesRef = useRef(savedEntries);
   const draftEntriesRef = useRef(draftEntries);
   const savedEditDraftRef = useRef(savedEditDraft);
-  const historyRevisionRef = useRef(0);
   const closeRequestRef = useRef<() => Promise<void>>(async () => undefined);
 
   useEffect(() => {
@@ -286,90 +274,14 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     savedEditDraftRef.current = savedEditDraft;
   }, [savedEditDraft]);
 
-  useEffect(() => {
-    let isMounted = true;
-    const previousOverflow = document.body.style.overflow;
-    const revisionBeforeFetch = historyRevisionRef.current;
-
-    document.body.style.overflow = "hidden";
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        void closeRequestRef.current();
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    async function syncCloudRequirement() {
-      setIsSyncing(true);
-
-      try {
-        const cloudNote = await fetchCloudRequirement(kind);
-        const hasUnsavedDraft = Boolean(entriesToText(draftEntriesRef.current).trim());
-
-        if (
-          !isMounted ||
-          hasUnsavedDraft ||
-          revisionBeforeFetch !== historyRevisionRef.current ||
-          cloudNote.updatedAt === null
-        ) {
-          return;
-        }
-
-        const cloudEntries = parseRequirementEntries(cloudNote.content, `cloud-${kind}`);
-
-        historyRevisionRef.current += 1;
-        savedEntriesRef.current = cloudEntries;
-        setSavedEntries(cloudEntries);
-        saveRequirementText(kind, entriesToText(cloudEntries));
-        setError("");
-      } catch (syncError) {
-        console.error(`${config.title}云端读取失败。`, syncError);
-
-        if (isMounted) {
-          setError(getRequirementSyncErrorMessage(syncError));
-        }
-      } finally {
-        if (isMounted) {
-          setIsSyncing(false);
-        }
-      }
-    }
-
-    void syncCloudRequirement();
-
-    return () => {
-      isMounted = false;
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [config.title, kind]);
-
-  function replaceSavedEntries(entries: RequirementEntry[]) {
+  function replaceSavedEntries(entries: RequirementEntry[], message = "已保存") {
     const normalizedEntries = parseRequirementEntries(entriesToText(entries), `saved-${kind}`);
 
-    historyRevisionRef.current += 1;
     savedEntriesRef.current = normalizedEntries;
     setSavedEntries(normalizedEntries);
     saveRequirementText(kind, entriesToText(normalizedEntries));
-  }
-
-  async function syncSavedEntriesToCloud(entries: RequirementEntry[], successMessage: string) {
-    replaceSavedEntries(entries);
-    setStatusMessage("已保存到本地");
+    setStatusMessage(message);
     setError("");
-    setIsSyncing(true);
-
-    try {
-      await saveCloudRequirement(kind, entriesToText(savedEntriesRef.current));
-      setStatusMessage(successMessage);
-    } catch (syncError) {
-      console.error(`${config.title}云端保存失败。`, syncError);
-      setError(getRequirementSyncErrorMessage(syncError));
-    } finally {
-      setIsSyncing(false);
-    }
   }
 
   function replaceDraftEntries(entries: RequirementEntry[]) {
@@ -435,7 +347,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     return entriesToText([originalEntry]) !== entriesToText([savedEditDraftRef.current]);
   }
 
-  async function saveSavedEntryEdit() {
+  function saveSavedEntryEdit() {
     if (!editingSavedEntryId || !savedEditDraftRef.current) {
       return true;
     }
@@ -461,24 +373,55 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
 
     setEditingSavedEntryId(null);
     setSavedEditDraft(null);
-    await syncSavedEntriesToCloud(nextEntries, "已修改并同步");
+    replaceSavedEntries(nextEntries, "已修改");
     return true;
   }
 
-  async function saveDraftToLocalAndCloud() {
+  function handleDeleteSavedEntry(entry: RequirementEntry) {
+    if (!window.confirm(`确定删除“${entry.name}：${entry.requirement}”吗？`)) {
+      return;
+    }
+
+    replaceSavedEntries(
+      savedEntriesRef.current.filter((currentEntry) => currentEntry.id !== entry.id),
+      "已删除",
+    );
+  }
+
+  function handleAddManualRequirement() {
+    const requirement = manualRequirement.trim();
+
+    if (!requirement) {
+      setError("请先填写要求内容");
+      return;
+    }
+
+    const nextEntry: RequirementEntry = {
+      id: createEntryId(`manual-${kind}`, savedEntriesRef.current.length),
+      name: normalizeTeacherName(manualName),
+      requirement,
+    };
+
+    replaceSavedEntries([...savedEntriesRef.current, nextEntry], "已新增要求");
+    setManualName("");
+    setManualRequirement("");
+  }
+
+  function saveDraftToLocal() {
     const draftText = entriesToText(draftEntriesRef.current);
 
     if (!draftText.trim()) {
       setError("暂无本次整理结果可保存");
-      return;
+      return false;
     }
 
     const nextHistoryText = appendResult(entriesToText(savedEntriesRef.current), draftText);
     const nextHistoryEntries = parseRequirementEntries(nextHistoryText, `saved-${kind}`);
 
-    await syncSavedEntriesToCloud(nextHistoryEntries, "已保存并同步");
+    replaceSavedEntries(nextHistoryEntries, "已保存");
     replaceDraftEntries([]);
     setSourceText("");
+    return true;
   }
 
   async function handleCloseRequest() {
@@ -486,7 +429,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
 
     if (getHasUnsavedSavedEdit()) {
       if (window.confirm("当前要求修改尚未保存，是否保存后关闭？")) {
-        const isSaved = await saveSavedEntryEdit();
+        const isSaved = saveSavedEntryEdit();
 
         if (!isSaved) {
           return;
@@ -500,7 +443,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     }
 
     if (window.confirm("本次整理结果尚未保存，是否保存后关闭？")) {
-      await saveDraftToLocalAndCloud();
+      saveDraftToLocal();
     }
 
     onCloseRef.current();
@@ -509,6 +452,20 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
   useEffect(() => {
     closeRequestRef.current = handleCloseRequest;
   });
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        void closeRequestRef.current();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   async function handleAnalyze() {
     const trimmedSource = sourceText.trim();
@@ -572,7 +529,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
       >
         <div className={styles.headingRow}>
           <div>
-            <p className={styles.label}>本地 + 云端保存</p>
+            <p className={styles.label}>本地保存</p>
             <h2 id="requirement-organizer-title">{config.title}</h2>
           </div>
           <button className={styles.closeButton} onClick={() => void handleCloseRequest()} type="button">
@@ -614,7 +571,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
                         <div className={styles.savedEditActions}>
                           <button
                             className={styles.miniSaveButton}
-                            onClick={() => void saveSavedEntryEdit()}
+                            onClick={saveSavedEntryEdit}
                             type="button"
                           >
                             保存
@@ -634,13 +591,22 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
                           <strong>{entry.name}：</strong>
                           {entry.requirement}
                         </p>
-                        <button
-                          className={styles.entryEditButton}
-                          onClick={() => startEditSavedEntry(entry)}
-                          type="button"
-                        >
-                          编辑
-                        </button>
+                        <div className={styles.entryButtons}>
+                          <button
+                            className={styles.entryEditButton}
+                            onClick={() => startEditSavedEntry(entry)}
+                            type="button"
+                          >
+                            编辑
+                          </button>
+                          <button
+                            className={styles.entryDeleteButton}
+                            onClick={() => handleDeleteSavedEntry(entry)}
+                            type="button"
+                          >
+                            删除
+                          </button>
+                        </div>
                       </>
                     )}
                   </article>
@@ -649,6 +615,40 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
             ) : (
               <p className={styles.emptyState}>暂无要求</p>
             )}
+          </section>
+
+          <section className={styles.section}>
+            <div className={styles.sectionHeader}>
+              <h3>手动录入</h3>
+            </div>
+            <div className={styles.manualGrid}>
+              <input
+                className={styles.nameInput}
+                onChange={(event) => {
+                  setManualName(event.target.value);
+                  if (error) {
+                    setError("");
+                  }
+                }}
+                placeholder="教师姓名"
+                value={manualName}
+              />
+              <textarea
+                className={styles.requirementTextarea}
+                onChange={(event) => {
+                  setManualRequirement(event.target.value);
+                  if (error) {
+                    setError("");
+                  }
+                }}
+                placeholder="要求内容"
+                rows={2}
+                value={manualRequirement}
+              />
+              <button className={styles.secondaryButton} onClick={handleAddManualRequirement} type="button">
+                新增要求
+              </button>
+            </div>
           </section>
 
           <section className={styles.section}>
@@ -707,7 +707,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
                 }
               }}
               placeholder={config.placeholder}
-              rows={6}
+              rows={5}
               value={sourceText}
             />
 
@@ -730,8 +730,8 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
           {statusMessage ? <p className={styles.status}>{statusMessage}</p> : null}
 
           <div className={styles.actions}>
-            <button className={styles.saveButton} onClick={() => void saveDraftToLocalAndCloud()} type="button">
-              {isSyncing ? "同步中..." : config.saveButton}
+            <button className={styles.saveButton} onClick={saveDraftToLocal} type="button">
+              {config.saveButton}
             </button>
             <button className={styles.secondaryButton} onClick={() => void handleCopy()} type="button">
               复制结果

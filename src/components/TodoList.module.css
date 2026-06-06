@@ -3,7 +3,7 @@
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow);
-  padding: 14px;
+  padding: 10px;
 }
 
 .headingRow {
@@ -11,7 +11,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .label {
@@ -35,8 +35,7 @@
   flex-shrink: 0;
 }
 
-.archiveToggle,
-.sortResetButton {
+.archiveToggle {
   min-height: 30px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -46,11 +45,6 @@
   font-size: 12px;
   font-weight: 750;
   white-space: nowrap;
-}
-
-.sortResetButton:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
 }
 
 .count {
@@ -68,23 +62,23 @@
   border-radius: 8px;
   background: var(--surface-soft);
   color: var(--muted);
-  padding: 14px;
-  font-size: 14px;
-  line-height: 1.55;
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .item {
   display: grid;
-  gap: 7px;
+  gap: 5px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fbfdfc;
-  padding: 9px;
+  padding: 7px;
   touch-action: pan-y;
 }
 
@@ -97,13 +91,13 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .summaryRow h3 {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.25;
 }
 
@@ -111,16 +105,16 @@
   border-radius: 999px;
   background: #fff7d6;
   color: #8a5a00;
-  padding: 5px 7px;
-  font-size: 12px;
+  padding: 4px 6px;
+  font-size: 11px;
   font-weight: 850;
   line-height: 1.2;
   white-space: nowrap;
 }
 
 .statusSelect {
-  max-width: 86px;
-  min-height: 30px;
+  max-width: 82px;
+  min-height: 28px;
   border-radius: 999px;
   padding: 0 7px;
   font-size: 11px;
@@ -153,7 +147,7 @@
 .actions {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
+  gap: 5px;
 }
 
 .detailButton,
@@ -162,8 +156,8 @@
 .dragHandle {
   min-height: 30px;
   border-radius: 8px;
-  padding: 0 8px;
-  font-size: 12px;
+  padding: 0 7px;
+  font-size: 11px;
   font-weight: 750;
 }
 
@@ -190,7 +184,7 @@
   display: grid;
   gap: 6px;
   border-top: 1px dashed var(--border);
-  padding-top: 7px;
+  padding-top: 6px;
 }
 
 .details div {
@@ -200,14 +194,14 @@
 
 .details dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 750;
 }
 
 .details dd {
   color: var(--foreground);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.4;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }

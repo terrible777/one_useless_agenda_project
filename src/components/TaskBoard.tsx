@@ -2,36 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  areTasksMarkedDirtyInStorage,
   isManualTaskSortEnabledInStorage,
   loadTasksFromStorage,
   saveTasksToStorage,
   setManualTaskSortEnabledInStorage,
-  setTasksDirtyInStorage,
 } from "@/lib/taskStorage";
-import {
-  inferManualSortEnabled,
-  sortTasksByDeadline,
-  sortTasksByManualOrder,
-} from "@/lib/taskSorting";
-import {
-  clearCloudTasksFromClient,
-  deleteCloudTaskFromClient,
-  fetchCloudTasks,
-  TaskSyncError,
-  upsertCloudTasksFromClient,
-} from "@/lib/taskSyncClient";
+import { sortTasksByDeadline, sortTasksByManualOrder } from "@/lib/taskSorting";
 import type { RequirementKind } from "@/lib/requirementStorage";
 import type { Task, TaskStatus } from "@/types/task";
 import { AnalyzeInput } from "./AnalyzeInput";
+import { LocalDataPanel } from "./LocalDataPanel";
 import { PendingTaskList } from "./PendingTaskList";
 import { RequirementOrganizerModal } from "./RequirementOrganizerModal";
 import { RequirementTools } from "./RequirementTools";
 import { ReminderRuntime } from "./ReminderRuntime";
-import { SyncStatusPanel } from "./SyncStatusPanel";
 import { TodoList } from "./TodoList";
-
-const SYNC_FAILURE_MESSAGE = "云端同步失败，已保存在本地";
 
 function createTemporaryId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -72,7 +57,6 @@ function touchTask(task: Task) {
 
 function normalizeTaskList(tasks: Task[], isManualSortEnabled: boolean) {
   const now = new Date().toISOString();
-
   const normalizedTasks = tasks.map((task) => ({
     ...task,
     title: task.title.trim(),
@@ -97,169 +81,13 @@ function normalizeTaskList(tasks: Task[], isManualSortEnabled: boolean) {
   }));
 }
 
-function formatSyncTime() {
-  return new Date().toLocaleString("zh-CN", {
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "2-digit",
-    second: "2-digit",
-    year: "numeric",
-  });
-}
-
-function getSyncFailureReason(error: unknown) {
-  if (error instanceof TaskSyncError) {
-    return error.message;
-  }
-
-  return SYNC_FAILURE_MESSAGE;
-}
-
 export function TaskBoard() {
   const [savedTasks, setSavedTasks] = useState<Task[]>([]);
   const [pendingTasks, setPendingTasks] = useState<Task[]>([]);
   const [inputClearSignal, setInputClearSignal] = useState(0);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncFailureReason, setLastSyncFailureReason] = useState<string | null>(null);
-  const [lastSyncSuccessAt, setLastSyncSuccessAt] = useState<string | null>(null);
-  const [isManualSortEnabled, setIsManualSortEnabled] = useState(false);
   const [activeRequirementKind, setActiveRequirementKind] = useState<RequirementKind | null>(null);
-  const localRevisionRef = useRef(0);
   const savedTasksRef = useRef<Task[]>([]);
-  const hasUnsyncedLocalChangesRef = useRef(false);
   const isManualSortEnabledRef = useRef(false);
-
-  function markLocalSyncPending() {
-    hasUnsyncedLocalChangesRef.current = true;
-    setTasksDirtyInStorage(true);
-  }
-
-  function markLocalSyncSettled() {
-    hasUnsyncedLocalChangesRef.current = false;
-    setTasksDirtyInStorage(false);
-  }
-
-  async function replaceCloudTasksWithLocalSnapshot(tasks: Task[]) {
-    await clearCloudTasksFromClient();
-
-    if (tasks.length > 0) {
-      await upsertCloudTasksFromClient(tasks);
-    }
-  }
-
-  useEffect(() => {
-    let isMounted = true;
-
-    function applyTasks(tasks: Task[], manualSortEnabled: boolean) {
-      const nextManualSortEnabled = manualSortEnabled && tasks.length > 0;
-      const nextTasks = normalizeTaskList(tasks, nextManualSortEnabled);
-
-      savedTasksRef.current = nextTasks;
-      isManualSortEnabledRef.current = nextManualSortEnabled;
-      saveTasksToStorage(nextTasks);
-      setManualTaskSortEnabledInStorage(nextManualSortEnabled);
-
-      if (isMounted) {
-        setSavedTasks(nextTasks);
-        setIsManualSortEnabled(nextManualSortEnabled);
-      }
-
-      return nextTasks;
-    }
-
-    function markEffectSyncSuccess() {
-      if (!isMounted) {
-        return;
-      }
-
-      markLocalSyncSettled();
-      setLastSyncSuccessAt(formatSyncTime());
-      setLastSyncFailureReason(null);
-    }
-
-    function markEffectSyncFailure(error: unknown) {
-      const reason = getSyncFailureReason(error);
-
-      console.error(reason, error);
-
-      if (isMounted) {
-        setLastSyncFailureReason(reason);
-      }
-    }
-
-    async function pullCloudTasks() {
-      const revisionBeforeFetch = localRevisionRef.current;
-
-      if (isMounted) {
-        setIsSyncing(true);
-      }
-
-      try {
-        const cloudTasks = await fetchCloudTasks();
-
-        if (revisionBeforeFetch !== localRevisionRef.current) {
-          return;
-        }
-
-        if (hasUnsyncedLocalChangesRef.current) {
-          await replaceCloudTasksWithLocalSnapshot(savedTasksRef.current);
-          markEffectSyncSuccess();
-          return;
-        }
-
-        if (cloudTasks.length > 0) {
-          applyTasks(cloudTasks, inferManualSortEnabled(cloudTasks));
-          markEffectSyncSuccess();
-          return;
-        }
-
-        applyTasks([], false);
-        markEffectSyncSuccess();
-      } catch (error) {
-        markEffectSyncFailure(error);
-      } finally {
-        if (isMounted) {
-          setIsSyncing(false);
-        }
-      }
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      hasUnsyncedLocalChangesRef.current = areTasksMarkedDirtyInStorage();
-      applyTasks(loadTasksFromStorage(), isManualTaskSortEnabledInStorage());
-      void pullCloudTasks();
-    }, 0);
-
-    function handleRefreshSync() {
-      if (document.visibilityState === "visible") {
-        void pullCloudTasks();
-      }
-    }
-
-    window.addEventListener("focus", handleRefreshSync);
-    document.addEventListener("visibilitychange", handleRefreshSync);
-
-    return () => {
-      isMounted = false;
-      window.clearTimeout(timeoutId);
-      window.removeEventListener("focus", handleRefreshSync);
-      document.removeEventListener("visibilitychange", handleRefreshSync);
-    };
-  }, []);
-
-  function markSyncSuccess() {
-    markLocalSyncSettled();
-    setLastSyncSuccessAt(formatSyncTime());
-    setLastSyncFailureReason(null);
-  }
-
-  function markSyncFailure(error: unknown) {
-    const reason = getSyncFailureReason(error);
-
-    setLastSyncFailureReason(reason);
-    console.error(reason, error);
-  }
 
   function applySavedTasks(tasks: Task[], manualSortEnabled = isManualSortEnabledRef.current) {
     const nextManualSortEnabled = manualSortEnabled && tasks.length > 0;
@@ -268,7 +96,6 @@ export function TaskBoard() {
     savedTasksRef.current = nextTasks;
     isManualSortEnabledRef.current = nextManualSortEnabled;
     setSavedTasks(nextTasks);
-    setIsManualSortEnabled(nextManualSortEnabled);
     saveTasksToStorage(nextTasks);
     setManualTaskSortEnabledInStorage(nextManualSortEnabled);
 
@@ -282,60 +109,12 @@ export function TaskBoard() {
     const nextTasks =
       typeof updater === "function" ? updater(savedTasksRef.current) : updater;
 
-    localRevisionRef.current += 1;
-    markLocalSyncPending();
-
     return applySavedTasks(nextTasks, manualSortEnabled);
   }
 
-  async function syncAllTasksToCloud(tasks: Task[], expectedRevision = localRevisionRef.current) {
-    setIsSyncing(true);
-
-    try {
-      await upsertCloudTasksFromClient(tasks);
-
-      if (expectedRevision === localRevisionRef.current) {
-        markSyncSuccess();
-      }
-    } catch (error) {
-      markSyncFailure(error);
-    } finally {
-      setIsSyncing(false);
-    }
-  }
-
-  async function handleManualSync() {
-    const revisionBeforeFetch = localRevisionRef.current;
-
-    setIsSyncing(true);
-
-    try {
-      const cloudTasks = await fetchCloudTasks();
-
-      if (revisionBeforeFetch !== localRevisionRef.current) {
-        return;
-      }
-
-      if (hasUnsyncedLocalChangesRef.current) {
-        await replaceCloudTasksWithLocalSnapshot(savedTasksRef.current);
-        markSyncSuccess();
-        return;
-      }
-
-      if (cloudTasks.length > 0) {
-        applySavedTasks(cloudTasks, inferManualSortEnabled(cloudTasks));
-        markSyncSuccess();
-        return;
-      }
-
-      applySavedTasks([], false);
-      markSyncSuccess();
-    } catch (error) {
-      markSyncFailure(error);
-    } finally {
-      setIsSyncing(false);
-    }
-  }
+  useEffect(() => {
+    applySavedTasks(loadTasksFromStorage(), isManualTaskSortEnabledInStorage());
+  }, []);
 
   function handleAnalyze(tasks: Task[]) {
     setPendingTasks(tasks);
@@ -377,17 +156,16 @@ export function TaskBoard() {
       sourceText: taskToSave.sourceText.trim(),
       sortOrder: isManualSortEnabledRef.current ? savedTasksRef.current.length : undefined,
     });
-    const nextTasks = commitSavedTasks(
+
+    commitSavedTasks(
       (currentTasks) =>
         isManualSortEnabledRef.current
           ? [...currentTasks, normalizedTask]
           : [normalizedTask, ...currentTasks],
       isManualSortEnabledRef.current,
     );
-
     setPendingTasks((currentTasks) => currentTasks.filter((task) => task.id !== taskToSave.id));
     setInputClearSignal((currentSignal) => currentSignal + 1);
-    void syncAllTasksToCloud(nextTasks);
   }
 
   function handleCancelPendingTask(taskId: string) {
@@ -395,39 +173,13 @@ export function TaskBoard() {
   }
 
   function handleDeleteSavedTask(taskId: string) {
-    const nextTasks = commitSavedTasks((currentTasks) =>
-      currentTasks.filter((task) => task.id !== taskId),
-    );
-    const expectedRevision = localRevisionRef.current;
-
-    void (async () => {
-      setIsSyncing(true);
-
-      try {
-        if (nextTasks.length > 0) {
-          await deleteCloudTaskFromClient(taskId);
-          await upsertCloudTasksFromClient(nextTasks);
-        } else {
-          await clearCloudTasksFromClient();
-        }
-
-        if (expectedRevision === localRevisionRef.current) {
-          markSyncSuccess();
-        }
-      } catch (error) {
-        markSyncFailure(error);
-      } finally {
-        setIsSyncing(false);
-      }
-    })();
+    commitSavedTasks((currentTasks) => currentTasks.filter((task) => task.id !== taskId));
   }
 
   function handleChangeSavedTaskStatus(taskId: string, status: TaskStatus) {
-    const nextTasks = commitSavedTasks((currentTasks) =>
+    commitSavedTasks((currentTasks) =>
       currentTasks.map((task) => (task.id === taskId ? touchTask({ ...task, status }) : task)),
     );
-
-    void syncAllTasksToCloud(nextTasks);
   }
 
   function handleUpdateSavedTask(updatedTask: Task) {
@@ -436,16 +188,16 @@ export function TaskBoard() {
       title: updatedTask.title.trim(),
       note: updatedTask.note.trim(),
     });
-    const nextTasks = commitSavedTasks((currentTasks) =>
+
+    commitSavedTasks((currentTasks) =>
       currentTasks.map((task) => (task.id === normalizedTask.id ? normalizedTask : task)),
     );
-
-    void syncAllTasksToCloud(nextTasks);
   }
 
   function handleReorderSavedTasks(reorderedTasks: Task[]) {
     const now = new Date().toISOString();
-    const nextTasks = commitSavedTasks(
+
+    commitSavedTasks(
       reorderedTasks.map((task, index) => ({
         ...task,
         sortOrder: index,
@@ -453,23 +205,6 @@ export function TaskBoard() {
       })),
       true,
     );
-
-    void syncAllTasksToCloud(nextTasks);
-  }
-
-  function handleRestoreDeadlineSort() {
-    const now = new Date().toISOString();
-    const nextTasks = commitSavedTasks(
-      (currentTasks) =>
-        currentTasks.map((task) => ({
-          ...task,
-          sortOrder: undefined,
-          updatedAt: now,
-        })),
-      false,
-    );
-
-    void syncAllTasksToCloud(nextTasks);
   }
 
   return (
@@ -478,9 +213,7 @@ export function TaskBoard() {
         onChangeTaskStatus={handleChangeSavedTaskStatus}
         onDeleteTask={handleDeleteSavedTask}
         onReorderTasks={handleReorderSavedTasks}
-        onRestoreDeadlineSort={handleRestoreDeadlineSort}
         onUpdateTask={handleUpdateSavedTask}
-        isManualSortEnabled={isManualSortEnabled}
         tasks={savedTasks}
       />
       <RequirementTools onOpen={setActiveRequirementKind} />
@@ -497,18 +230,13 @@ export function TaskBoard() {
         />
       ) : null}
       <PendingTaskList
-        tasks={pendingTasks}
         onCancelTask={handleCancelPendingTask}
         onChangeTask={handleChangePendingTask}
         onSaveTask={handleSaveTask}
+        tasks={pendingTasks}
       />
       <ReminderRuntime />
-      <SyncStatusPanel
-        isSyncing={isSyncing}
-        lastFailureReason={lastSyncFailureReason}
-        lastSuccessAt={lastSyncSuccessAt}
-        onManualSync={() => void handleManualSync()}
-      />
+      <LocalDataPanel />
     </>
   );
 }

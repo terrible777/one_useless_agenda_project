@@ -1,7 +1,10 @@
-import "server-only";
+import type { Task } from "../../src/types/task";
 
-import { SYSTEM_PROMPT } from "@/lib/taskExtractionPrompt";
-import type { Task } from "@/types/task";
+export type DeepSeekEnv = {
+  DEEPSEEK_API_KEY?: string;
+  DEEPSEEK_BASE_URL?: string;
+  DEEPSEEK_MODEL?: string;
+};
 
 export type ExtractedTask = Omit<Task, "id">;
 
@@ -42,10 +45,19 @@ export class DeepSeekHttpError extends Error {
 }
 
 export class DeepSeekResponseParseError extends Error {
-  constructor(message = "AI response is not valid JSON.") {
+  constructor(message = "AI response parse failed.") {
     super(message);
     this.name = "DeepSeekResponseParseError";
   }
+}
+
+export function createJsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    status,
+  });
 }
 
 function getShanghaiDateString() {
@@ -57,10 +69,10 @@ function getShanghaiDateString() {
   }).format(new Date());
 }
 
-function getDeepSeekConfig() {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  const baseUrl = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
-  const model = process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
+function getDeepSeekConfig(env: DeepSeekEnv) {
+  const apiKey = env.DEEPSEEK_API_KEY;
+  const baseUrl = env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
+  const model = env.DEEPSEEK_MODEL ?? "deepseek-chat";
 
   if (!apiKey) {
     throw new DeepSeekConfigError();
@@ -94,7 +106,7 @@ async function readSafeErrorSummary(response: Response) {
 
     try {
       const parsed = JSON.parse(sanitizedText) as {
-        error?: { message?: unknown; type?: unknown; code?: unknown };
+        error?: { code?: unknown; message?: unknown; type?: unknown };
         message?: unknown;
       };
       const message =
@@ -161,102 +173,15 @@ function normalizeExtractedTask(task: RawExtractedTask, sourceText: string): Ext
   };
 }
 
-export async function analyzeTextWithDeepSeek(text: string): Promise<ExtractedTask[]> {
-  const { apiKey, baseUrl, model } = getDeepSeekConfig();
-  const sourceText = text.trim();
-  const currentDate = getShanghaiDateString();
-
+async function requestDeepSeek(env: DeepSeekEnv, messages: Array<{ content: string; role: string }>) {
+  const { apiKey, baseUrl, model } = getDeepSeekConfig(env);
   const response = await fetch(`${baseUrl}/chat/completions`, {
     body: JSON.stringify({
       max_tokens: 2000,
-      messages: [
-        {
-          role: "system",
-          content: SYSTEM_PROMPT,
-        },
-        {
-          role: "user",
-          content: `当前日期（Asia/Shanghai）：${currentDate}\n用户输入：\n${sourceText}`,
-        },
-      ],
+      messages,
       model,
       temperature: 0.1,
     }),
-    cache: "no-store",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    throw new DeepSeekHttpError(response.status, await readSafeErrorSummary(response));
-  }
-
-  let data: DeepSeekResponse;
-
-  try {
-    data = (await response.json()) as DeepSeekResponse;
-  } catch (error) {
-    throw new DeepSeekResponseParseError(
-      error instanceof Error ? error.message : "DeepSeek API JSON response parse failed.",
-    );
-  }
-
-  const content = data.choices?.[0]?.message?.content;
-
-  if (!content) {
-    throw new DeepSeekResponseParseError("DeepSeek API response is empty.");
-  }
-
-  let parsedTasks: unknown;
-
-  try {
-    parsedTasks = JSON.parse(extractJsonArray(content)) as unknown;
-  } catch (error) {
-    throw new DeepSeekResponseParseError(
-      error instanceof Error ? error.message : "DeepSeek task JSON parse failed.",
-    );
-  }
-
-  if (!Array.isArray(parsedTasks)) {
-    throw new DeepSeekResponseParseError("DeepSeek response JSON is not an array.");
-  }
-
-  const normalizedTasks = parsedTasks
-    .map((task) => normalizeExtractedTask(task as RawExtractedTask, sourceText))
-    .filter((task): task is ExtractedTask => task !== null);
-
-  if (normalizedTasks.length === 0) {
-    throw new DeepSeekResponseParseError("DeepSeek did not return any valid task.");
-  }
-
-  // The product rule is one task per user input, so never expose extra model items.
-  return normalizedTasks.slice(0, 1);
-}
-
-export async function organizeTextWithDeepSeek(text: string, systemPrompt: string) {
-  const { apiKey, baseUrl, model } = getDeepSeekConfig();
-  const sourceText = text.trim();
-
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    body: JSON.stringify({
-      max_tokens: 2000,
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: `用户输入：\n${sourceText}`,
-        },
-      ],
-      model,
-      temperature: 0.1,
-    }),
-    cache: "no-store",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
@@ -284,5 +209,87 @@ export async function organizeTextWithDeepSeek(text: string, systemPrompt: strin
     throw new DeepSeekResponseParseError("DeepSeek API response is empty.");
   }
 
+  return content;
+}
+
+export async function analyzeTextWithDeepSeek(
+  text: string,
+  systemPrompt: string,
+  env: DeepSeekEnv,
+): Promise<ExtractedTask[]> {
+  const sourceText = text.trim();
+  const currentDate = getShanghaiDateString();
+  const content = await requestDeepSeek(env, [
+    {
+      role: "system",
+      content: systemPrompt,
+    },
+    {
+      role: "user",
+      content: `当前日期（Asia/Shanghai）：${currentDate}\n用户输入：\n${sourceText}`,
+    },
+  ]);
+
+  let parsedTasks: unknown;
+
+  try {
+    parsedTasks = JSON.parse(extractJsonArray(content)) as unknown;
+  } catch (error) {
+    throw new DeepSeekResponseParseError(
+      error instanceof Error ? error.message : "DeepSeek task JSON parse failed.",
+    );
+  }
+
+  if (!Array.isArray(parsedTasks)) {
+    throw new DeepSeekResponseParseError("DeepSeek response JSON is not an array.");
+  }
+
+  const normalizedTasks = parsedTasks
+    .map((task) => normalizeExtractedTask(task as RawExtractedTask, sourceText))
+    .filter((task): task is ExtractedTask => task !== null);
+
+  if (normalizedTasks.length === 0) {
+    throw new DeepSeekResponseParseError("DeepSeek did not return any valid task.");
+  }
+
+  return normalizedTasks.slice(0, 1);
+}
+
+export async function organizeTextWithDeepSeek(
+  text: string,
+  systemPrompt: string,
+  env: DeepSeekEnv,
+) {
+  const sourceText = text.trim();
+  const content = await requestDeepSeek(env, [
+    {
+      role: "system",
+      content: systemPrompt,
+    },
+    {
+      role: "user",
+      content: `用户输入：\n${sourceText}`,
+    },
+  ]);
+
   return content.replace(/^```(?:text|markdown)?\s*/i, "").replace(/\s*```$/i, "").trim();
+}
+
+export function createDeepSeekErrorResponse(error: unknown, fallbackMessage: string) {
+  if (error instanceof DeepSeekConfigError) {
+    return createJsonResponse({ error: "未配置 DeepSeek API Key" }, 500);
+  }
+
+  if (error instanceof DeepSeekHttpError) {
+    return createJsonResponse(
+      { error: `DeepSeek 请求失败（HTTP ${error.status}）：${error.summary}` },
+      502,
+    );
+  }
+
+  if (error instanceof DeepSeekResponseParseError) {
+    return createJsonResponse({ error: "AI 返回内容解析失败" }, 502);
+  }
+
+  return createJsonResponse({ error: fallbackMessage }, 500);
 }
