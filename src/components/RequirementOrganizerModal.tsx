@@ -73,6 +73,14 @@ function createEntryId(prefix: string, index: number) {
   return `${prefix}-${Date.now()}-${index}`;
 }
 
+function createBlankEntry(prefix: string, index: number): RequirementEntry {
+  return {
+    id: createEntryId(prefix, index),
+    name: "",
+    requirement: "",
+  };
+}
+
 function normalizeTeacherName(name: string) {
   const normalizedName = name.trim().replace(/老师$/, "");
 
@@ -255,12 +263,12 @@ async function requestRequirementOrganization(config: RequirementConfig, text: s
 export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganizerModalProps) {
   const config = REQUIREMENT_CONFIGS[kind];
   const [sourceText, setSourceText] = useState("");
-  const [manualName, setManualName] = useState("");
-  const [manualRequirement, setManualRequirement] = useState("");
   const [savedEntries, setSavedEntries] = useState<RequirementEntry[]>(() =>
     parseRequirementEntries(loadRequirementText(kind), `saved-${kind}`),
   );
-  const [draftEntries, setDraftEntries] = useState<RequirementEntry[]>([]);
+  const [draftEntries, setDraftEntries] = useState<RequirementEntry[]>(() => [
+    createBlankEntry(`draft-input-${kind}`, 0),
+  ]);
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -321,11 +329,21 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     }
   }
 
-  function replaceDraftEntries(entries: RequirementEntry[]) {
-    const normalizedEntries = parseRequirementEntries(entriesToText(entries), `draft-${kind}`);
+  function getSavableDraftEntries(entries = draftEntriesRef.current) {
+    return parseRequirementEntries(entriesToText(entries), `draft-save-${kind}`);
+  }
 
-    draftEntriesRef.current = normalizedEntries;
-    setDraftEntries(normalizedEntries);
+  function replaceDraftEntries(entries: RequirementEntry[], includeBlankEntry = true) {
+    const normalizedEntries = parseRequirementEntries(entriesToText(entries), `draft-${kind}`);
+    const nextEntries = includeBlankEntry
+      ? [
+          ...normalizedEntries,
+          createBlankEntry(`draft-input-${kind}`, normalizedEntries.length),
+        ]
+      : normalizedEntries;
+
+    draftEntriesRef.current = nextEntries;
+    setDraftEntries(nextEntries);
   }
 
   useEffect(() => {
@@ -464,28 +482,20 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
   }
 
   function handleAddManualRequirement() {
-    const requirement = manualRequirement.trim();
+    const lastEntry = draftEntriesRef.current.at(-1);
 
-    if (!requirement) {
+    if (!lastEntry?.requirement.trim()) {
       setError("请先填写要求内容");
       return;
     }
 
-    const nextEntry: RequirementEntry = {
-      id: createEntryId(`manual-${kind}`, savedEntriesRef.current.length),
-      name: normalizeTeacherName(manualName),
-      requirement,
-    };
-
-    replaceDraftEntries([...draftEntriesRef.current, nextEntry]);
-    setStatusMessage("已加入本次整理结果，可编辑后保存");
+    replaceDraftEntries(draftEntriesRef.current);
+    setStatusMessage("已新增要求，可继续填写下一条");
     setError("");
-    setManualName("");
-    setManualRequirement("");
   }
 
   function saveDraftToLocal() {
-    const draftText = entriesToText(draftEntriesRef.current);
+    const draftText = entriesToText(getSavableDraftEntries());
 
     if (!draftText.trim()) {
       setError("暂无本次整理结果可保存");
@@ -502,7 +512,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
   }
 
   async function handleCloseRequest() {
-    const draftText = entriesToText(draftEntriesRef.current);
+    const draftText = entriesToText(getSavableDraftEntries());
 
     if (getHasUnsavedSavedEdit()) {
       if (window.confirm("当前要求修改尚未保存，是否保存后关闭？")) {
@@ -595,6 +605,8 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
       setError("复制失败，请手动选择文本复制");
     }
   }
+
+  const draftEntryCount = draftEntries.filter((entry) => entry.requirement.trim()).length;
 
   return (
     <div className={styles.overlay} role="presentation">
@@ -697,78 +709,49 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
           <section className={styles.section}>
             <div className={styles.sectionHeader}>
               <h3>本次整理结果</h3>
-              <span>{draftEntries.length > 0 ? `${draftEntries.length} 条待保存` : "未整理"}</span>
+              <span>{draftEntryCount > 0 ? `${draftEntryCount} 条待保存` : "未整理"}</span>
             </div>
 
-            <article className={`${styles.entryEditor} ${styles.draftEditor}`}>
-              <label>
-                <span>手动新增</span>
-                <input
-                  className={styles.nameInput}
-                  onChange={(event) => {
-                    setManualName(event.target.value);
-                    if (error) {
-                      setError("");
-                    }
-                  }}
-                  placeholder="教师姓名"
-                  value={manualName}
-                />
-              </label>
-              <label>
-                <span>要求内容</span>
-                <textarea
-                  className={styles.requirementTextarea}
-                  onChange={(event) => {
-                    setManualRequirement(event.target.value);
-                    if (error) {
-                      setError("");
-                    }
-                  }}
-                  placeholder="可直接输入要求，点击新增后进入本次整理结果"
-                  rows={2}
-                  value={manualRequirement}
-                />
-              </label>
-              <button className={styles.secondaryButton} onClick={handleAddManualRequirement} type="button">
-                新增要求
-              </button>
-            </article>
+            <div className={styles.entryList}>
+              {draftEntries.map((entry) => (
+                <article
+                  className={`${styles.entryEditor} ${styles.draftEditor}`}
+                  key={entry.id}
+                >
+                  <label>
+                    <span>老师姓名</span>
+                    <input
+                      className={styles.nameInput}
+                      onChange={(event) =>
+                        updateDraftEntry(entry.id, { name: event.target.value })
+                      }
+                      placeholder="教师姓名"
+                      value={entry.name}
+                    />
+                  </label>
+                  <label>
+                    <span>要求内容</span>
+                    <textarea
+                      className={styles.requirementTextarea}
+                      onChange={(event) =>
+                        updateDraftEntry(entry.id, { requirement: event.target.value })
+                      }
+                      placeholder="AI 整理结果会显示在这里，也可以直接填写"
+                      rows={2}
+                      value={entry.requirement}
+                    />
+                  </label>
+                </article>
+              ))}
+            </div>
 
-            {draftEntries.length > 0 ? (
-              <div className={styles.entryList}>
-                {draftEntries.map((entry) => (
-                  <article
-                    className={`${styles.entryEditor} ${styles.draftEditor}`}
-                    key={entry.id}
-                  >
-                    <label>
-                      <span>老师姓名</span>
-                      <input
-                        className={styles.nameInput}
-                        onChange={(event) =>
-                          updateDraftEntry(entry.id, { name: event.target.value })
-                        }
-                        value={entry.name}
-                      />
-                    </label>
-                    <label>
-                      <span>要求内容</span>
-                      <textarea
-                        className={styles.requirementTextarea}
-                        onChange={(event) =>
-                          updateDraftEntry(entry.id, { requirement: event.target.value })
-                        }
-                        rows={3}
-                        value={entry.requirement}
-                      />
-                    </label>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p className={styles.emptyState}>AI 整理或手动新增后会显示在这里。</p>
-            )}
+            <button
+              className={`${styles.secondaryButton} ${styles.draftAddButton}`}
+              onClick={handleAddManualRequirement}
+              type="button"
+            >
+              新增要求
+            </button>
           </section>
 
           <section className={styles.section}>

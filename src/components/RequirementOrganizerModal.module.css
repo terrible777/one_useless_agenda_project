@@ -223,6 +223,14 @@
   font-size: 12px;
 }
 
+.draftAddButton {
+  min-height: 36px;
+  border-color: #f2c94c;
+  background: #fffbeb;
+  color: #854d0e;
+  font-size: 12px;
+}
+
 .savedEditForm {
   display: grid;
   grid-column: 1 / -1;
