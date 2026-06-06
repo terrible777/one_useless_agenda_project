@@ -1,6 +1,25 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  type DragEndEvent,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   loadRequirementText,
   type RequirementKind,
@@ -39,9 +58,23 @@ type RequirementApiResponse = {
 };
 
 type RequirementEntry = {
+  hidden: boolean;
   id: string;
   name: string;
   requirement: string;
+};
+
+type SortableRequirementEntryProps = {
+  entry: RequirementEntry;
+  isEditing: boolean;
+  isSortingDisabled: boolean;
+  onCancelEdit: () => void;
+  onDelete: (entry: RequirementEntry) => void;
+  onEdit: (entry: RequirementEntry) => void;
+  onSaveEdit: () => boolean;
+  onToggleHidden: (entry: RequirementEntry) => void;
+  onUpdateEditDraft: (changes: Partial<RequirementEntry>) => void;
+  savedEditDraft: RequirementEntry | null;
 };
 
 const REQUIREMENT_CONFIGS: Record<RequirementKind, RequirementConfig> = {
@@ -63,6 +96,7 @@ const REQUIREMENT_CONFIGS: Record<RequirementKind, RequirementConfig> = {
   },
 };
 
+const HIDDEN_ENTRY_MARKER = "[[agenda-hidden]]";
 const USER_ADDRESS_NAMES = new Set(["秦", "秦瑞博", "小秦", "瑞博", "秦老师"]);
 
 function createEntryId(prefix: string, index: number) {
@@ -75,6 +109,7 @@ function createEntryId(prefix: string, index: number) {
 
 function createBlankEntry(prefix: string, index: number): RequirementEntry {
   return {
+    hidden: false,
     id: createEntryId(prefix, index),
     name: "",
     requirement: "",
@@ -91,9 +126,25 @@ function normalizeTeacherName(name: string) {
   return normalizedName;
 }
 
+function readHiddenEntryMarker(line: string) {
+  const trimmedLine = line.trim();
+
+  if (!trimmedLine.startsWith(HIDDEN_ENTRY_MARKER)) {
+    return {
+      hidden: false,
+      line: trimmedLine,
+    };
+  }
+
+  return {
+    hidden: true,
+    line: trimmedLine.slice(HIDDEN_ENTRY_MARKER.length).trim(),
+  };
+}
+
 function normalizeRequirementLine(line: string) {
-  let nextLine = line
-    .trim()
+  const markedLine = readHiddenEntryMarker(line);
+  let nextLine = markedLine.line
     .replace(/^#{1,6}\s*/, "")
     .replace(/^[-*]\s*/, "")
     .replace(/^\d+[.、]\s*/, "");
@@ -126,19 +177,21 @@ function normalizeRequirementResult(text: string) {
 }
 
 function parseRequirementEntries(text: string, prefix: string): RequirementEntry[] {
-  const normalizedText = normalizeRequirementResult(text);
-
-  if (!normalizedText) {
-    return [];
-  }
-
-  return normalizedText
+  return text
     .split(/\r?\n/)
-    .map((line, index) => {
+    .map((rawLine, index) => {
+      const { hidden } = readHiddenEntryMarker(rawLine);
+      const line = normalizeRequirementLine(rawLine);
+
+      if (!line) {
+        return null;
+      }
+
       const separatorIndex = line.indexOf("：");
 
       if (separatorIndex === -1) {
         return {
+          hidden,
           id: createEntryId(prefix, index),
           name: "未注明老师",
           requirement: line.trim(),
@@ -146,15 +199,31 @@ function parseRequirementEntries(text: string, prefix: string): RequirementEntry
       }
 
       return {
+        hidden,
         id: createEntryId(prefix, index),
         name: normalizeTeacherName(line.slice(0, separatorIndex)),
         requirement: line.slice(separatorIndex + 1).trim(),
       };
     })
-    .filter((entry) => entry.name || entry.requirement);
+    .filter((entry): entry is RequirementEntry => Boolean(entry?.name || entry?.requirement));
 }
 
 function entriesToText(entries: RequirementEntry[]) {
+  return entries
+    .map((entry) => {
+      const requirement = entry.requirement.trim();
+
+      if (!requirement) {
+        return "";
+      }
+
+      return `${entry.hidden ? HIDDEN_ENTRY_MARKER : ""}${normalizeTeacherName(entry.name)}：${requirement}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function entriesToDisplayText(entries: RequirementEntry[]) {
   return entries
     .map((entry) => {
       const requirement = entry.requirement.trim();
@@ -169,19 +238,18 @@ function entriesToText(entries: RequirementEntry[]) {
     .join("\n");
 }
 
-function appendResult(currentText: string, nextText: string) {
-  const current = normalizeRequirementResult(currentText);
-  const next = normalizeRequirementResult(nextText);
-
-  if (!current) {
-    return next;
+function mergeVisibleRequirementOrder(
+  entries: RequirementEntry[],
+  reorderedVisibleEntries: RequirementEntry[],
+  showHiddenEntries: boolean,
+) {
+  if (showHiddenEntries) {
+    return reorderedVisibleEntries;
   }
 
-  if (!next) {
-    return current;
-  }
+  const reorderedQueue = [...reorderedVisibleEntries];
 
-  return `${current}\n${next}`;
+  return entries.map((entry) => (entry.hidden ? entry : (reorderedQueue.shift() ?? entry)));
 }
 
 function getEntryToneClassName(name: string) {
@@ -260,6 +328,105 @@ async function requestRequirementOrganization(config: RequirementConfig, text: s
   return data.result.trim();
 }
 
+function SortableRequirementEntry({
+  entry,
+  isEditing,
+  isSortingDisabled,
+  onCancelEdit,
+  onDelete,
+  onEdit,
+  onSaveEdit,
+  onToggleHidden,
+  onUpdateEditDraft,
+  savedEditDraft,
+}: SortableRequirementEntryProps) {
+  const { attributes, isDragging, listeners, setNodeRef, transform, transition } = useSortable({
+    disabled: isSortingDisabled,
+    id: entry.id,
+  });
+  const style: CSSProperties = {
+    opacity: isDragging ? 0.86 : undefined,
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 2 : undefined,
+  };
+
+  return (
+    <article
+      className={`${styles.entryCard} ${getEntryToneClassName(entry.name)} ${
+        isDragging ? styles.entryDragging : ""
+      } ${entry.hidden ? styles.entryHidden : ""}`}
+      ref={setNodeRef}
+      style={style}
+    >
+      {isEditing && savedEditDraft ? (
+        <div className={styles.savedEditForm}>
+          <input
+            aria-label="老师姓名"
+            className={styles.savedNameInput}
+            onChange={(event) => onUpdateEditDraft({ name: event.target.value })}
+            value={savedEditDraft.name}
+          />
+          <textarea
+            aria-label="要求内容"
+            className={styles.savedRequirementTextarea}
+            onChange={(event) => onUpdateEditDraft({ requirement: event.target.value })}
+            rows={2}
+            value={savedEditDraft.requirement}
+          />
+          <div className={styles.savedEditActions}>
+            <button className={styles.miniSaveButton} onClick={onSaveEdit} type="button">
+              保存
+            </button>
+            <button className={styles.miniCancelButton} onClick={onCancelEdit} type="button">
+              取消
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className={styles.entryLine}>
+            <strong>{entry.name}：</strong>
+            {entry.requirement}
+          </p>
+          <div className={styles.entryButtons}>
+            <button
+              className={styles.entryEditButton}
+              onClick={() => onEdit(entry)}
+              type="button"
+            >
+              编辑
+            </button>
+            <button
+              className={styles.entryHideButton}
+              onClick={() => onToggleHidden(entry)}
+              type="button"
+            >
+              {entry.hidden ? "展示" : "隐藏"}
+            </button>
+            <button
+              {...attributes}
+              {...listeners}
+              aria-label={`拖动 ${entry.name || "未注明老师"} 的要求排序`}
+              className={styles.entryDragButton}
+              type="button"
+            >
+              拖动
+            </button>
+            <button
+              className={styles.entryDeleteButton}
+              onClick={() => onDelete(entry)}
+              type="button"
+            >
+              删除
+            </button>
+          </div>
+        </>
+      )}
+    </article>
+  );
+}
+
 export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganizerModalProps) {
   const config = REQUIREMENT_CONFIGS[kind];
   const [sourceText, setSourceText] = useState("");
@@ -273,12 +440,29 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
   const [statusMessage, setStatusMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [editingSavedEntryId, setEditingSavedEntryId] = useState<string | null>(null);
+  const [showHiddenEntries, setShowHiddenEntries] = useState(false);
   const [savedEditDraft, setSavedEditDraft] = useState<RequirementEntry | null>(null);
   const onCloseRef = useRef(onClose);
   const savedEntriesRef = useRef(savedEntries);
   const draftEntriesRef = useRef(draftEntries);
   const savedEditDraftRef = useRef(savedEditDraft);
   const closeRequestRef = useRef<() => Promise<void>>(async () => undefined);
+  const savedEntrySensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 120,
+        tolerance: 5,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -329,7 +513,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     }
   }
 
-  function getSavableDraftEntries(entries = draftEntriesRef.current) {
+  function getSavableDraftEntries(entries: RequirementEntry[]) {
     return parseRequirementEntries(entriesToText(entries), `draft-save-${kind}`);
   }
 
@@ -481,38 +665,78 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     );
   }
 
-  function handleAddManualRequirement() {
-    const lastEntry = draftEntriesRef.current.at(-1);
+  function handleToggleSavedEntryHidden(entry: RequirementEntry) {
+    replaceSavedEntries(
+      savedEntriesRef.current.map((currentEntry) =>
+        currentEntry.id === entry.id
+          ? {
+              ...currentEntry,
+              hidden: !currentEntry.hidden,
+            }
+          : currentEntry,
+      ),
+      entry.hidden ? "已展示" : "已隐藏",
+    );
+  }
 
-    if (!lastEntry?.requirement.trim()) {
+  function handleSavedEntryDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id || editingSavedEntryId) {
+      return;
+    }
+
+    const oldIndex = visibleSavedEntries.findIndex((entry) => entry.id === String(active.id));
+    const newIndex = visibleSavedEntries.findIndex((entry) => entry.id === String(over.id));
+
+    if (oldIndex === -1 || newIndex === -1) {
+      return;
+    }
+
+    replaceSavedEntries(
+      mergeVisibleRequirementOrder(
+        savedEntries,
+        arrayMove(visibleSavedEntries, oldIndex, newIndex),
+        showHiddenEntries,
+      ),
+      "已调整顺序",
+    );
+  }
+
+  function handleAddManualRequirement() {
+    const currentEntry = getSavableDraftEntries(draftEntriesRef.current.slice(0, 1))[0];
+
+    if (!currentEntry) {
       setError("请先填写要求内容");
       return;
     }
 
-    replaceDraftEntries(draftEntriesRef.current);
-    setStatusMessage("已新增要求，可继续填写下一条");
+    const remainingEntries = getSavableDraftEntries(draftEntriesRef.current.slice(1));
+
+    replaceSavedEntries([...savedEntriesRef.current, currentEntry], "已新增要求");
+    replaceDraftEntries(remainingEntries);
+    setStatusMessage(remainingEntries.length > 0 ? "已新增要求，已载入下一条" : "已新增要求");
     setError("");
   }
 
   function saveDraftToLocal() {
-    const draftText = entriesToText(getSavableDraftEntries());
+    const currentEntry = getSavableDraftEntries(draftEntriesRef.current.slice(0, 1))[0];
 
-    if (!draftText.trim()) {
+    if (!currentEntry) {
       setError("暂无本次整理结果可保存");
       return false;
     }
 
-    const nextHistoryText = appendResult(entriesToText(savedEntriesRef.current), draftText);
-    const nextHistoryEntries = parseRequirementEntries(nextHistoryText, `saved-${kind}`);
+    const remainingEntries = getSavableDraftEntries(draftEntriesRef.current.slice(1));
 
-    replaceSavedEntries(nextHistoryEntries, "已保存");
-    replaceDraftEntries([]);
+    replaceSavedEntries([...savedEntriesRef.current, currentEntry], "已保存");
+    replaceDraftEntries(remainingEntries);
     setSourceText("");
     return true;
   }
 
   async function handleCloseRequest() {
-    const draftText = entriesToText(getSavableDraftEntries());
+    const draftText = entriesToText(getSavableDraftEntries(draftEntriesRef.current));
 
     if (getHasUnsavedSavedEdit()) {
       if (window.confirm("当前要求修改尚未保存，是否保存后关闭？")) {
@@ -587,7 +811,7 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
   }
 
   async function handleCopy() {
-    const textToCopy = entriesToText(savedEntries);
+    const textToCopy = entriesToDisplayText(visibleSavedEntries);
 
     if (!textToCopy) {
       setError("暂无可复制内容");
@@ -606,7 +830,12 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     }
   }
 
-  const draftEntryCount = draftEntries.filter((entry) => entry.requirement.trim()).length;
+  const draftEntryCount = getSavableDraftEntries(draftEntries).length;
+  const visibleDraftEntry = draftEntries[0] ?? createBlankEntry(`draft-input-${kind}`, 0);
+  const hiddenEntryCount = savedEntries.filter((entry) => entry.hidden).length;
+  const visibleSavedEntries = showHiddenEntries
+    ? savedEntries
+    : savedEntries.filter((entry) => !entry.hidden);
 
   return (
     <div className={styles.overlay} role="presentation">
@@ -630,119 +859,94 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
           <section className={styles.section}>
             <div className={styles.sectionHeader}>
               <h3>要求列表</h3>
-              <span>{savedEntries.length} 条</span>
+              <div className={styles.listHeaderActions}>
+                {hiddenEntryCount > 0 ? (
+                  <button
+                    className={styles.listToggleButton}
+                    onClick={() => setShowHiddenEntries((currentValue) => !currentValue)}
+                    type="button"
+                  >
+                    {showHiddenEntries ? "隐藏要求" : "显示要求"}
+                  </button>
+                ) : null}
+                <span>
+                  {visibleSavedEntries.length} 条
+                  {hiddenEntryCount > 0 ? ` / 隐藏 ${hiddenEntryCount}` : ""}
+                </span>
+              </div>
             </div>
 
-            {savedEntries.length > 0 ? (
-              <div className={styles.entryList}>
-                {savedEntries.map((entry) => (
-                  <article
-                    className={`${styles.entryCard} ${getEntryToneClassName(entry.name)}`}
-                    key={entry.id}
-                  >
-                    {editingSavedEntryId === entry.id && savedEditDraft ? (
-                      <div className={styles.savedEditForm}>
-                        <input
-                          aria-label="老师姓名"
-                          className={styles.savedNameInput}
-                          onChange={(event) => updateSavedEditDraft({ name: event.target.value })}
-                          value={savedEditDraft.name}
-                        />
-                        <textarea
-                          aria-label="要求内容"
-                          className={styles.savedRequirementTextarea}
-                          onChange={(event) =>
-                            updateSavedEditDraft({ requirement: event.target.value })
-                          }
-                          rows={2}
-                          value={savedEditDraft.requirement}
-                        />
-                        <div className={styles.savedEditActions}>
-                          <button
-                            className={styles.miniSaveButton}
-                            onClick={saveSavedEntryEdit}
-                            type="button"
-                          >
-                            保存
-                          </button>
-                          <button
-                            className={styles.miniCancelButton}
-                            onClick={cancelEditSavedEntry}
-                            type="button"
-                          >
-                            取消
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <p className={styles.entryLine}>
-                          <strong>{entry.name}：</strong>
-                          {entry.requirement}
-                        </p>
-                        <div className={styles.entryButtons}>
-                          <button
-                            className={styles.entryEditButton}
-                            onClick={() => startEditSavedEntry(entry)}
-                            type="button"
-                          >
-                            编辑
-                          </button>
-                          <button
-                            className={styles.entryDeleteButton}
-                            onClick={() => handleDeleteSavedEntry(entry)}
-                            type="button"
-                          >
-                            删除
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </article>
-                ))}
-              </div>
+            {visibleSavedEntries.length > 0 ? (
+              <DndContext
+                collisionDetection={closestCenter}
+                onDragEnd={handleSavedEntryDragEnd}
+                sensors={savedEntrySensors}
+              >
+                <SortableContext
+                  items={visibleSavedEntries.map((entry) => entry.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className={styles.entryList}>
+                    {visibleSavedEntries.map((entry) => (
+                      <SortableRequirementEntry
+                        entry={entry}
+                        isEditing={editingSavedEntryId === entry.id}
+                        isSortingDisabled={editingSavedEntryId !== null}
+                        key={entry.id}
+                        onCancelEdit={cancelEditSavedEntry}
+                        onDelete={handleDeleteSavedEntry}
+                        onEdit={startEditSavedEntry}
+                        onSaveEdit={saveSavedEntryEdit}
+                        onToggleHidden={handleToggleSavedEntryHidden}
+                        onUpdateEditDraft={updateSavedEditDraft}
+                        savedEditDraft={savedEditDraft}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
             ) : (
-              <p className={styles.emptyState}>暂无要求</p>
+              <p className={styles.emptyState}>
+                {savedEntries.length > 0 ? "暂无显示要求，点击右上角显示要求查看隐藏内容。" : "暂无要求"}
+              </p>
             )}
           </section>
 
           <section className={styles.section}>
             <div className={styles.sectionHeader}>
               <h3>本次整理结果</h3>
-              <span>{draftEntryCount > 0 ? `${draftEntryCount} 条待保存` : "未整理"}</span>
+              <span>{draftEntryCount > 0 ? `${draftEntryCount} 条待处理` : "未整理"}</span>
             </div>
 
             <div className={styles.entryList}>
-              {draftEntries.map((entry) => (
-                <article
-                  className={`${styles.entryEditor} ${styles.draftEditor}`}
-                  key={entry.id}
-                >
-                  <label>
-                    <span>老师姓名</span>
-                    <input
-                      className={styles.nameInput}
-                      onChange={(event) =>
-                        updateDraftEntry(entry.id, { name: event.target.value })
-                      }
-                      placeholder="教师姓名"
-                      value={entry.name}
-                    />
-                  </label>
-                  <label>
-                    <span>要求内容</span>
-                    <textarea
-                      className={styles.requirementTextarea}
-                      onChange={(event) =>
-                        updateDraftEntry(entry.id, { requirement: event.target.value })
-                      }
-                      placeholder="AI 整理结果会显示在这里，也可以直接填写"
-                      rows={2}
-                      value={entry.requirement}
-                    />
-                  </label>
-                </article>
-              ))}
+              <article
+                className={`${styles.entryEditor} ${styles.draftEditor}`}
+                key={visibleDraftEntry.id}
+              >
+                <label>
+                  <span>老师姓名</span>
+                  <input
+                    className={styles.nameInput}
+                    onChange={(event) =>
+                      updateDraftEntry(visibleDraftEntry.id, { name: event.target.value })
+                    }
+                    placeholder="教师姓名"
+                    value={visibleDraftEntry.name}
+                  />
+                </label>
+                <label>
+                  <span>要求内容</span>
+                  <textarea
+                    className={styles.requirementTextarea}
+                    onChange={(event) =>
+                      updateDraftEntry(visibleDraftEntry.id, { requirement: event.target.value })
+                    }
+                    placeholder="AI 整理结果会显示在这里，也可以直接填写"
+                    rows={2}
+                    value={visibleDraftEntry.requirement}
+                  />
+                </label>
+              </article>
             </div>
 
             <button
