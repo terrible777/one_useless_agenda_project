@@ -94,6 +94,14 @@ create table if not exists public.tasks (
 
 create index if not exists tasks_sort_order_idx
   on public.tasks (sort_order);
+
+create table if not exists public.requirement_notes (
+  id text primary key,
+  type text not null check (type in ('exam', 'course')),
+  content text not null,
+  created_at text not null,
+  updated_at text not null
+);
 ```
 
 当前项目只给单用户使用，不做 Supabase Auth、多用户、注册或登录。部署地址本身请妥善保管。
@@ -119,6 +127,55 @@ create index if not exists tasks_sort_order_idx
 - 两端都会调用同一组 Next.js API Routes。
 - API Routes 读写同一个 Supabase `tasks` 表。
 - 所以一端修改任务后，另一端刷新、回到前台或点击“手动同步”即可看到云端数据。
+
+## 排考/排课要求整理（云同步版）
+
+首页待办列表下方提供两个独立入口：
+
+- `排考要求`：整理老师关于排考、监考、考试时间安排的要求。
+- `排课要求`：整理老师关于排课、上课时间、教室、课程安排的要求。
+
+使用方式：
+
+1. 点击对应入口打开弹窗。
+2. 粘贴老师的口语化要求。
+3. 点击 `AI整理排考要求` 或 `AI整理排课要求`。
+4. 在结果区编辑最终汇总文本。
+5. 点击保存后先写入浏览器 localStorage，再通过 `/api/requirements` 同步到 Supabase。
+6. 点击 `复制结果` 可复制当前结果区全文。
+
+本地保存 key：
+
+```text
+agenda_generate_exam_requirements
+agenda_generate_course_requirements
+```
+
+要求整理云同步 API Route：
+
+```text
+GET /api/requirements?type=exam
+GET /api/requirements?type=course
+POST /api/requirements
+DELETE /api/requirements?type=exam
+DELETE /api/requirements?type=course
+
+POST /api/exam-requirements
+POST /api/course-requirements
+```
+
+`/api/exam-requirements` 和 `/api/course-requirements` 用于调用 DeepSeek 整理文本；`/api/requirements` 用于读写 Supabase `requirement_notes` 表。所有 Supabase 写入都通过 Next.js API Route 在服务端完成，`SUPABASE_SERVICE_ROLE_KEY` 不会进入前端 bundle。
+
+同步规则：
+
+- 打开排考/排课弹窗时，先显示 localStorage 缓存。
+- 随后请求 `GET /api/requirements?type=exam` 或 `GET /api/requirements?type=course` 拉取云端内容。
+- 如果云端已有记录，会覆盖本地缓存并写回 localStorage。
+- 保存时先写 localStorage，再 `POST /api/requirements` 写入 Supabase。
+- 清空时先清空 localStorage，再 `DELETE /api/requirements?type=...` 清空云端内容。
+- 云端同步失败不会影响本地保存；页面会显示“云端同步失败，已保存在本地”及具体错误摘要。
+
+部署后电脑和手机访问同一个 Vercel 地址，即可看到同一份排考/排课要求。验证方式：电脑端保存排考或排课要求，手机端打开同一弹窗并等待云端拉取；手机端清空后，电脑端重新打开对应弹窗应显示为空。
 
 ## DeepSeek AI
 
@@ -187,10 +244,26 @@ https://你的域名/api/tasks
 
 如果页面同步状态面板显示 `POST /api/tasks 返回 502`，优先检查 Vercel 是否配置了 `SUPABASE_SERVICE_ROLE_KEY`。
 
+验证排考/排课要求云同步：
+
+1. 本地或线上打开页面，点击 `排考要求` 或 `排课要求`。
+2. 编辑整理结果并保存。
+3. 访问：
+
+```text
+https://你的域名/api/requirements?type=exam
+https://你的域名/api/requirements?type=course
+```
+
+4. 应能看到对应 `content`。
+5. 在另一台设备打开同一个 Vercel 地址，再打开对应弹窗，应自动拉取云端内容。
+6. 点击清空后，再访问对应 `/api/requirements?type=...`，`content` 应为空字符串。
+
 ## Vercel 兼容性说明
 
 - `/api/analyze` 只从 `process.env` 读取 DeepSeek 环境变量，适合 Vercel Serverless。
 - `/api/tasks` 和 `/api/tasks/clear` 只从 `process.env` 读取 Supabase 环境变量，适合 Vercel Serverless。
+- `/api/requirements` 只从 `process.env` 读取 Supabase 环境变量，适合 Vercel Serverless。
 - 所有 API Route 都不依赖本地终端或本地文件写入。
 - DeepSeek API Key 和 Supabase service role key 不会进入前端 bundle。
 - Supabase 请求由服务端 API Route 发起。

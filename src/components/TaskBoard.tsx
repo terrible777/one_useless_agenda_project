@@ -1,16 +1,26 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { loadTasksFromStorage, saveTasksToStorage } from "@/lib/taskStorage";
 import {
+  areTasksMarkedDirtyInStorage,
+  loadTasksFromStorage,
+  saveTasksToStorage,
+  setTasksDirtyInStorage,
+} from "@/lib/taskStorage";
+import { sortTasksByDeadline } from "@/lib/taskSorting";
+import {
+  clearCloudTasksFromClient,
   deleteCloudTaskFromClient,
   fetchCloudTasks,
   TaskSyncError,
   upsertCloudTasksFromClient,
 } from "@/lib/taskSyncClient";
+import type { RequirementKind } from "@/lib/requirementStorage";
 import type { Task, TaskStatus } from "@/types/task";
 import { AnalyzeInput } from "./AnalyzeInput";
 import { PendingTaskList } from "./PendingTaskList";
+import { RequirementOrganizerModal } from "./RequirementOrganizerModal";
+import { RequirementTools } from "./RequirementTools";
 import { ReminderRuntime } from "./ReminderRuntime";
 import { SyncStatusPanel } from "./SyncStatusPanel";
 import { TodoList } from "./TodoList";
@@ -57,15 +67,20 @@ function touchTask(task: Task) {
 function normalizeTaskList(tasks: Task[]) {
   const now = new Date().toISOString();
 
-  return tasks.map((task, index) => ({
+  const normalizedTasks = tasks.map((task, index) => ({
     ...task,
     title: task.title.trim(),
     deadlineAt: task.deadlineAt ?? buildDeadlineAt(task),
     note: task.note.trim(),
     sourceText: task.sourceText.trim(),
-    sortOrder: index,
+    sortOrder: typeof task.sortOrder === "number" ? task.sortOrder : index,
     createdAt: task.createdAt ?? now,
     updatedAt: task.updatedAt ?? now,
+  }));
+
+  return sortTasksByDeadline(normalizedTasks).map((task, index) => ({
+    ...task,
+    sortOrder: index,
   }));
 }
 
@@ -95,8 +110,28 @@ export function TaskBoard() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncFailureReason, setLastSyncFailureReason] = useState<string | null>(null);
   const [lastSyncSuccessAt, setLastSyncSuccessAt] = useState<string | null>(null);
+  const [activeRequirementKind, setActiveRequirementKind] = useState<RequirementKind | null>(null);
   const localRevisionRef = useRef(0);
   const savedTasksRef = useRef<Task[]>([]);
+  const hasUnsyncedLocalChangesRef = useRef(false);
+
+  function markLocalSyncPending() {
+    hasUnsyncedLocalChangesRef.current = true;
+    setTasksDirtyInStorage(true);
+  }
+
+  function markLocalSyncSettled() {
+    hasUnsyncedLocalChangesRef.current = false;
+    setTasksDirtyInStorage(false);
+  }
+
+  async function replaceCloudTasksWithLocalSnapshot(tasks: Task[]) {
+    await clearCloudTasksFromClient();
+
+    if (tasks.length > 0) {
+      await upsertCloudTasksFromClient(tasks);
+    }
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -119,6 +154,7 @@ export function TaskBoard() {
         return;
       }
 
+      markLocalSyncSettled();
       setLastSyncSuccessAt(formatSyncTime());
       setLastSyncFailureReason(null);
     }
@@ -133,7 +169,7 @@ export function TaskBoard() {
       }
     }
 
-    async function pullCloudTasks(seedLocalWhenCloudEmpty: boolean) {
+    async function pullCloudTasks() {
       const revisionBeforeFetch = localRevisionRef.current;
 
       if (isMounted) {
@@ -147,22 +183,19 @@ export function TaskBoard() {
           return;
         }
 
+        if (hasUnsyncedLocalChangesRef.current) {
+          await replaceCloudTasksWithLocalSnapshot(savedTasksRef.current);
+          markEffectSyncSuccess();
+          return;
+        }
+
         if (cloudTasks.length > 0) {
           applyTasks(cloudTasks);
           markEffectSyncSuccess();
           return;
         }
 
-        if (savedTasksRef.current.length > 0) {
-          await upsertCloudTasksFromClient(savedTasksRef.current);
-          markEffectSyncSuccess();
-          return;
-        }
-
-        if (!seedLocalWhenCloudEmpty) {
-          applyTasks([]);
-        }
-
+        applyTasks([]);
         markEffectSyncSuccess();
       } catch (error) {
         markEffectSyncFailure(error);
@@ -174,13 +207,14 @@ export function TaskBoard() {
     }
 
     const timeoutId = window.setTimeout(() => {
+      hasUnsyncedLocalChangesRef.current = areTasksMarkedDirtyInStorage();
       applyTasks(loadTasksFromStorage());
-      void pullCloudTasks(true);
+      void pullCloudTasks();
     }, 0);
 
     function handleRefreshSync() {
       if (document.visibilityState === "visible") {
-        void pullCloudTasks(false);
+        void pullCloudTasks();
       }
     }
 
@@ -196,6 +230,7 @@ export function TaskBoard() {
   }, []);
 
   function markSyncSuccess() {
+    markLocalSyncSettled();
     setLastSyncSuccessAt(formatSyncTime());
     setLastSyncFailureReason(null);
   }
@@ -222,15 +257,20 @@ export function TaskBoard() {
       typeof updater === "function" ? updater(savedTasksRef.current) : updater;
 
     localRevisionRef.current += 1;
+    markLocalSyncPending();
+
     return applySavedTasks(nextTasks);
   }
 
-  async function syncAllTasksToCloud(tasks: Task[]) {
+  async function syncAllTasksToCloud(tasks: Task[], expectedRevision = localRevisionRef.current) {
     setIsSyncing(true);
 
     try {
       await upsertCloudTasksFromClient(tasks);
-      markSyncSuccess();
+
+      if (expectedRevision === localRevisionRef.current) {
+        markSyncSuccess();
+      }
     } catch (error) {
       markSyncFailure(error);
     } finally {
@@ -250,14 +290,14 @@ export function TaskBoard() {
         return;
       }
 
-      if (cloudTasks.length > 0) {
-        applySavedTasks(cloudTasks);
+      if (hasUnsyncedLocalChangesRef.current) {
+        await replaceCloudTasksWithLocalSnapshot(savedTasksRef.current);
         markSyncSuccess();
         return;
       }
 
-      if (savedTasksRef.current.length > 0) {
-        await upsertCloudTasksFromClient(savedTasksRef.current);
+      if (cloudTasks.length > 0) {
+        applySavedTasks(cloudTasks);
         markSyncSuccess();
         return;
       }
@@ -325,18 +365,22 @@ export function TaskBoard() {
     const nextTasks = commitSavedTasks((currentTasks) =>
       currentTasks.filter((task) => task.id !== taskId),
     );
+    const expectedRevision = localRevisionRef.current;
 
     void (async () => {
       setIsSyncing(true);
 
       try {
-        await deleteCloudTaskFromClient(taskId);
-
         if (nextTasks.length > 0) {
+          await deleteCloudTaskFromClient(taskId);
           await upsertCloudTasksFromClient(nextTasks);
+        } else {
+          await clearCloudTasksFromClient();
         }
 
-        markSyncSuccess();
+        if (expectedRevision === localRevisionRef.current) {
+          markSyncSuccess();
+        }
       } catch (error) {
         markSyncFailure(error);
       } finally {
@@ -367,7 +411,12 @@ export function TaskBoard() {
   }
 
   function handleReorderSavedTasks(reorderedTasks: Task[]) {
-    const nextTasks = commitSavedTasks(reorderedTasks);
+    const nextTasks = commitSavedTasks(
+      reorderedTasks.map((task, index) => ({
+        ...task,
+        sortOrder: index,
+      })),
+    );
 
     void syncAllTasksToCloud(nextTasks);
   }
@@ -381,11 +430,19 @@ export function TaskBoard() {
         onUpdateTask={handleUpdateSavedTask}
         tasks={savedTasks}
       />
+      <RequirementTools onOpen={setActiveRequirementKind} />
       <AnalyzeInput
         key={inputClearSignal}
         onAnalyze={handleAnalyze}
         onCreateManualTask={handleCreateManualTask}
       />
+      {activeRequirementKind ? (
+        <RequirementOrganizerModal
+          kind={activeRequirementKind}
+          key={activeRequirementKind}
+          onClose={() => setActiveRequirementKind(null)}
+        />
+      ) : null}
       <PendingTaskList
         tasks={pendingTasks}
         onCancelTask={handleCancelPendingTask}

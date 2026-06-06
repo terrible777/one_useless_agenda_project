@@ -49,13 +49,21 @@ function formatDeadline(task: Task) {
     return "未设置截止时间";
   }
 
-  return [task.deadlineDate, task.deadlineTime].filter(Boolean).join(" ");
+  if (!task.deadlineDate) {
+    return task.deadlineTime ?? "未设置截止时间";
+  }
+
+  const [year, month, day] = task.deadlineDate.split("-").map(Number);
+  const deadlineDate = new Date(year, month - 1, day);
+  const weekDays = ["日", "一", "二", "三", "四", "五", "六"];
+  const monthDay = `${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const weekDay = `周${weekDays[deadlineDate.getDay()]}`;
+
+  return [monthDay, weekDay, task.deadlineTime].filter(Boolean).join(" ");
 }
 
-function summarizeSourceText(sourceText: string) {
-  const compactText = sourceText.replace(/\s+/g, " ").trim();
-
-  return compactText.length > 60 ? `${compactText.slice(0, 60)}...` : compactText;
+function normalizeSourceText(sourceText: string) {
+  return sourceText.replace(/\s+/g, " ").trim();
 }
 
 function getStatusClassName(status: TaskStatus) {
@@ -68,6 +76,30 @@ function getStatusClassName(status: TaskStatus) {
   }
 
   return `${styles.statusSelect} ${styles.statusCompleted}`;
+}
+
+function getVisibleTasks(tasks: Task[], showArchivedTasks: boolean) {
+  if (showArchivedTasks) {
+    return tasks;
+  }
+
+  return tasks.filter((task) => task.status !== "completed");
+}
+
+function mergeVisibleTaskOrder(
+  tasks: Task[],
+  reorderedVisibleTasks: Task[],
+  showArchivedTasks: boolean,
+) {
+  if (showArchivedTasks) {
+    return reorderedVisibleTasks;
+  }
+
+  const reorderedQueue = [...reorderedVisibleTasks];
+
+  return tasks.map((task) =>
+    task.status === "completed" ? task : (reorderedQueue.shift() ?? task),
+  );
 }
 
 function SortableTodoItem({
@@ -93,6 +125,12 @@ function SortableTodoItem({
     zIndex: isDragging ? 2 : undefined,
   };
 
+  function handleDelete() {
+    if (window.confirm(`确定删除“${task.title}”吗？`)) {
+      onDeleteTask(task.id);
+    }
+  }
+
   return (
     <article
       className={`${styles.item} ${isDragging ? styles.itemDragging : ""}`}
@@ -104,16 +142,8 @@ function SortableTodoItem({
       ) : (
         <>
           <div className={styles.summaryRow}>
-            <button
-              {...attributes}
-              {...listeners}
-              aria-label={`拖动 ${task.title} 排序`}
-              className={styles.dragHandle}
-              type="button"
-            >
-              拖动
-            </button>
             <h3>{task.title}</h3>
+            <p className={styles.deadlineText}>{formatDeadline(task)}</p>
             <select
               aria-label={`${task.title} 状态`}
               className={getStatusClassName(task.status)}
@@ -128,28 +158,30 @@ function SortableTodoItem({
             </select>
           </div>
 
-          <div className={styles.metaRow}>
-            <p>{formatDeadline(task)}</p>
-            <div className={styles.actions}>
-              <button
-                aria-expanded={isExpanded}
-                className={styles.detailButton}
-                onClick={onToggleDetails}
-                type="button"
-              >
-                {isExpanded ? "收起" : "详情"}
-              </button>
-              <button className={styles.editButton} onClick={onEdit} type="button">
-                编辑
-              </button>
-              <button
-                className={styles.deleteButton}
-                onClick={() => onDeleteTask(task.id)}
-                type="button"
-              >
-                删除
-              </button>
-            </div>
+          <div className={styles.actions}>
+            <button
+              aria-expanded={isExpanded}
+              className={styles.detailButton}
+              onClick={onToggleDetails}
+              type="button"
+            >
+              {isExpanded ? "收起" : "详情"}
+            </button>
+            <button className={styles.editButton} onClick={onEdit} type="button">
+              编辑
+            </button>
+            <button className={styles.deleteButton} onClick={handleDelete} type="button">
+              删除
+            </button>
+            <button
+              {...attributes}
+              {...listeners}
+              aria-label={`拖动 ${task.title} 排序`}
+              className={styles.dragHandle}
+              type="button"
+            >
+              拖动
+            </button>
           </div>
 
           {isExpanded ? (
@@ -160,7 +192,7 @@ function SortableTodoItem({
               </div>
               <div>
                 <dt>原文</dt>
-                <dd>{summarizeSourceText(task.sourceText) || "无"}</dd>
+                <dd>{normalizeSourceText(task.sourceText) || "无"}</dd>
               </div>
             </dl>
           ) : null}
@@ -179,6 +211,9 @@ export function TodoList({
 }: TodoListProps) {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [expandedTaskIds, setExpandedTaskIds] = useState<string[]>([]);
+  const [showArchivedTasks, setShowArchivedTasks] = useState(false);
+  const archivedTaskCount = tasks.filter((task) => task.status === "completed").length;
+  const visibleTasks = getVisibleTasks(tasks, showArchivedTasks);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -202,14 +237,20 @@ export function TodoList({
       return;
     }
 
-    const oldIndex = tasks.findIndex((task) => task.id === String(active.id));
-    const newIndex = tasks.findIndex((task) => task.id === String(over.id));
+    const oldIndex = visibleTasks.findIndex((task) => task.id === String(active.id));
+    const newIndex = visibleTasks.findIndex((task) => task.id === String(over.id));
 
     if (oldIndex === -1 || newIndex === -1) {
       return;
     }
 
-    onReorderTasks(arrayMove(tasks, oldIndex, newIndex));
+    onReorderTasks(
+      mergeVisibleTaskOrder(
+        tasks,
+        arrayMove(visibleTasks, oldIndex, newIndex),
+        showArchivedTasks,
+      ),
+    );
   }
 
   function toggleDetails(taskId: string) {
@@ -224,21 +265,36 @@ export function TodoList({
     <section className={styles.card} aria-labelledby="todo-list-title">
       <div className={styles.headingRow}>
         <div>
-          <p className={styles.label}>已保存任务</p>
           <h2 id="todo-list-title">待办列表</h2>
         </div>
-        <span className={styles.count}>{tasks.length} 项</span>
+        <div className={styles.headingActions}>
+          <span className={styles.count}>
+            {visibleTasks.length} 项{archivedTaskCount > 0 ? ` / 归档 ${archivedTaskCount}` : ""}
+          </span>
+          <button
+            className={styles.archiveToggle}
+            onClick={() => setShowArchivedTasks((currentValue) => !currentValue)}
+            type="button"
+          >
+            {showArchivedTasks ? "隐藏归档任务" : "显示归档任务"}
+          </button>
+        </div>
       </div>
 
       {tasks.length === 0 ? (
         <p className={styles.empty}>
           暂无任务。可以先粘贴内容进行 AI 分析，也可以手动新建一张待确认任务卡片。
         </p>
+      ) : visibleTasks.length === 0 ? (
+        <p className={styles.empty}>暂无未归档任务，点击右上角显示归档任务查看已完成任务。</p>
       ) : (
         <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd} sensors={sensors}>
-          <SortableContext items={tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
+          <SortableContext
+            items={visibleTasks.map((task) => task.id)}
+            strategy={verticalListSortingStrategy}
+          >
             <div className={styles.list}>
-              {tasks.map((task) => (
+              {visibleTasks.map((task) => (
                 <SortableTodoItem
                   isEditing={editingTaskId === task.id}
                   isExpanded={expandedTaskIds.includes(task.id)}

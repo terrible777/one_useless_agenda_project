@@ -2,6 +2,7 @@ import type { Task, TaskStatus } from "@/types/task";
 import { TASK_STATUSES } from "@/types/task";
 
 const STORAGE_KEY = "agenda_generate_tasks";
+const DIRTY_STORAGE_KEY = "agenda_generate_tasks_dirty";
 
 function isTaskStatus(value: unknown): value is TaskStatus {
   return typeof value === "string" && TASK_STATUSES.includes(value as TaskStatus);
@@ -117,4 +118,38 @@ export function clearTasksInStorage() {
   }
 
   localStorage.removeItem(STORAGE_KEY);
+}
+
+export function areTasksMarkedDirtyInStorage() {
+  const localStorage = getLocalStorage();
+
+  if (!localStorage) {
+    return false;
+  }
+
+  try {
+    return localStorage.getItem(DIRTY_STORAGE_KEY) === "true";
+  } catch (error) {
+    console.warn("Failed to read task sync dirty flag.", error);
+    return false;
+  }
+}
+
+export function setTasksDirtyInStorage(isDirty: boolean) {
+  const localStorage = getLocalStorage();
+
+  if (!localStorage) {
+    return;
+  }
+
+  try {
+    if (isDirty) {
+      localStorage.setItem(DIRTY_STORAGE_KEY, "true");
+      return;
+    }
+
+    localStorage.removeItem(DIRTY_STORAGE_KEY);
+  } catch (error) {
+    console.warn("Failed to update task sync dirty flag.", error);
+  }
 }

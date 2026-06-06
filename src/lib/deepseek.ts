@@ -235,3 +235,54 @@ export async function analyzeTextWithDeepSeek(text: string): Promise<ExtractedTa
   // The product rule is one task per user input, so never expose extra model items.
   return normalizedTasks.slice(0, 1);
 }
+
+export async function organizeTextWithDeepSeek(text: string, systemPrompt: string) {
+  const { apiKey, baseUrl, model } = getDeepSeekConfig();
+  const sourceText = text.trim();
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    body: JSON.stringify({
+      max_tokens: 2000,
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt,
+        },
+        {
+          role: "user",
+          content: `用户输入：\n${sourceText}`,
+        },
+      ],
+      model,
+      temperature: 0.1,
+    }),
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new DeepSeekHttpError(response.status, await readSafeErrorSummary(response));
+  }
+
+  let data: DeepSeekResponse;
+
+  try {
+    data = (await response.json()) as DeepSeekResponse;
+  } catch (error) {
+    throw new DeepSeekResponseParseError(
+      error instanceof Error ? error.message : "DeepSeek API JSON response parse failed.",
+    );
+  }
+
+  const content = data.choices?.[0]?.message?.content?.trim();
+
+  if (!content) {
+    throw new DeepSeekResponseParseError("DeepSeek API response is empty.");
+  }
+
+  return content.replace(/^```(?:text|markdown)?\s*/i, "").replace(/\s*```$/i, "").trim();
+}
