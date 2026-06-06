@@ -1,0 +1,204 @@
+.card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.headingRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.headingRow h2 {
+  margin-top: 4px;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.count {
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  padding: 14px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.list {
+  display: grid;
+  gap: 10px;
+}
+
+.item {
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfdfc;
+  padding: 12px;
+  touch-action: pan-y;
+}
+
+.itemDragging {
+  border-color: var(--primary);
+  box-shadow: 0 12px 28px rgb(15 118 110 / 18%);
+}
+
+.summaryRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.summaryRow h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.dragHandle {
+  min-width: 44px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 750;
+  touch-action: none;
+  user-select: none;
+}
+
+.statusSelect {
+  max-width: 92px;
+  min-height: 34px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 750;
+  outline: none;
+}
+
+.statusSelect:focus {
+  box-shadow: 0 0 0 3px rgb(15 118 110 / 14%);
+}
+
+.statusNotStarted {
+  border: 1px solid #f3c44f;
+  background: #fff7d6;
+  color: #8a5a00;
+}
+
+.statusInProgress {
+  border: 1px solid #8ab7ff;
+  background: #e8f1ff;
+  color: #175cd3;
+}
+
+.statusCompleted {
+  border: 1px solid #9bd7ae;
+  background: #e9f8ee;
+  color: #067647;
+}
+
+.metaRow {
+  display: grid;
+  gap: 9px;
+}
+
+.metaRow p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.detailButton,
+.editButton,
+.deleteButton {
+  min-height: 36px;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.detailButton,
+.editButton {
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--primary-strong);
+}
+
+.deleteButton {
+  border: 1px solid #f1b4ad;
+  background: #fff7f6;
+  color: #b42318;
+}
+
+.details {
+  display: grid;
+  gap: 8px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+}
+
+.details div {
+  display: grid;
+  gap: 3px;
+}
+
+.details dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.details dd {
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 440px) {
+  .metaRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .actions {
+    width: 216px;
+  }
+}

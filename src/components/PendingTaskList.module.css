@@ -1,0 +1,39 @@
+.section {
+  display: grid;
+  gap: 12px;
+}
+
+.headingRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.label {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.headingRow h2 {
+  margin-top: 3px;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.count {
+  min-height: 28px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.list {
+  display: grid;
+  gap: 12px;
+}
