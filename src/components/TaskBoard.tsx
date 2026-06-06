@@ -147,7 +147,7 @@ export function TaskBoard() {
           return;
         }
 
-        if (cloudTasks.length > 0 || !seedLocalWhenCloudEmpty) {
+        if (cloudTasks.length > 0) {
           applyTasks(cloudTasks);
           markEffectSyncSuccess();
           return;
@@ -155,6 +155,12 @@ export function TaskBoard() {
 
         if (savedTasksRef.current.length > 0) {
           await upsertCloudTasksFromClient(savedTasksRef.current);
+          markEffectSyncSuccess();
+          return;
+        }
+
+        if (!seedLocalWhenCloudEmpty) {
+          applyTasks([]);
         }
 
         markEffectSyncSuccess();
@@ -244,7 +250,19 @@ export function TaskBoard() {
         return;
       }
 
-      applySavedTasks(cloudTasks);
+      if (cloudTasks.length > 0) {
+        applySavedTasks(cloudTasks);
+        markSyncSuccess();
+        return;
+      }
+
+      if (savedTasksRef.current.length > 0) {
+        await upsertCloudTasksFromClient(savedTasksRef.current);
+        markSyncSuccess();
+        return;
+      }
+
+      applySavedTasks([]);
       markSyncSuccess();
     } catch (error) {
       markSyncFailure(error);
