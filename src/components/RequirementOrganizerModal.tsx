@@ -24,14 +24,14 @@ import {
   loadRequirementText,
   type RequirementKind,
   saveRequirementText,
+  subscribeRequirementText,
 } from "@/lib/requirementStorage";
 import {
   recordCloudSyncFailure,
   recordCloudSyncSuccess,
 } from "@/lib/cloudSyncStatus";
 import {
-  fetchCloudRequirement,
-  isRequirementCloudInitializedInStorage,
+  refreshRequirementFromCloud,
   pushRequirementTextToCloud,
   setRequirementCloudInitializedInStorage,
 } from "@/lib/requirementSyncClient";
@@ -484,12 +484,12 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
     try {
       await pushRequirementTextToCloud(kind, text);
       setRequirementCloudInitializedInStorage(kind, true);
-      recordCloudSyncSuccess();
+      recordCloudSyncSuccess(kind);
     } catch (syncError) {
       const message = `云端同步失败，已保存在本地：${getCloudSyncErrorMessage(syncError)}`;
 
       console.error(`${config.title}云端同步失败。`, syncError);
-      recordCloudSyncFailure(message);
+      recordCloudSyncFailure(message, kind);
       setError(message);
     }
   }
@@ -531,42 +531,34 @@ export function RequirementOrganizerModal({ kind, onClose }: RequirementOrganize
   }
 
   useEffect(() => {
+    let disposed = false;
+    const unsubscribe = subscribeRequirementText(kind, () => {
+      const text = loadRequirementText(kind);
+      if (savedEditDraftRef.current || text === entriesToText(savedEntriesRef.current)) return;
+      const nextEntries = parseRequirementEntries(text, `saved-${kind}`);
+      savedEntriesRef.current = nextEntries;
+      setSavedEntries(nextEntries);
+    });
+
     async function pullSavedRequirementFromCloud() {
-      const localText = entriesToText(savedEntriesRef.current);
-
       try {
-        const cloudRequirement = await fetchCloudRequirement(kind);
-        const hasInitialized = isRequirementCloudInitializedInStorage(kind);
-
-        if (
-          cloudRequirement.content.trim() ||
-          hasInitialized ||
-          !localText.trim()
-        ) {
-          replaceSavedEntries(
-            parseRequirementEntries(cloudRequirement.content, `saved-${kind}`),
-            cloudRequirement.content.trim() ? "已从云端同步" : "",
-            false,
-          );
-        } else {
-          await pushRequirementTextToCloud(kind, localText);
-        }
-
-        setRequirementCloudInitializedInStorage(kind, true);
-        recordCloudSyncSuccess();
+        await refreshRequirementFromCloud(kind);
+        if (!disposed) recordCloudSyncSuccess(kind);
       } catch (syncError) {
         const message = `云端同步失败，已保存在本地：${getCloudSyncErrorMessage(syncError)}`;
 
         console.error(`${config.title}云端读取失败。`, syncError);
-        recordCloudSyncFailure(message);
-        setError(message);
+        recordCloudSyncFailure(message, kind);
+        if (!disposed) setError(message);
       }
     }
 
     void pullSavedRequirementFromCloud();
-    // 弹窗打开时拉取一次云端历史；保存、编辑、删除会分别主动同步。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind]);
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [kind, config.title]);
 
   function updateDraftEntry(entryId: string, nextEntry: Partial<RequirementEntry>) {
     setDraftEntries((currentEntries) => {

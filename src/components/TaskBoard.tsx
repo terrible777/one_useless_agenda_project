@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   isManualTaskSortEnabledInStorage,
   loadTasksFromStorage,
@@ -12,20 +12,21 @@ import {
   recordCloudSyncSuccess,
 } from "@/lib/cloudSyncStatus";
 import {
-  fetchCloudRequirement,
-  isRequirementCloudInitializedInStorage,
+  refreshRequirementFromCloud,
   pushRequirementTextToCloud,
   setRequirementCloudInitializedInStorage,
 } from "@/lib/requirementSyncClient";
+import { startCloudSyncLifecycle } from "@/lib/cloudSyncLifecycle";
 import { sortTasksByDeadline, sortTasksByManualOrder } from "@/lib/taskSorting";
 import {
   loadRequirementText,
-  saveRequirementText,
   type RequirementKind,
 } from "@/lib/requirementStorage";
 import {
   deleteCloudTask,
   fetchCloudTasks,
+  getTaskSyncRevision,
+  hasPendingCloudTaskChanges,
   isTaskCloudInitializedInStorage,
   replaceCloudTaskList,
   setTaskCloudInitializedInStorage,
@@ -108,11 +109,11 @@ function getCloudSyncErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "未知错误";
 }
 
-function recordCloudSyncError(error: unknown) {
+function recordCloudSyncError(error: unknown, resource = "all") {
   const message = `云端同步失败，已保存在本地：${getCloudSyncErrorMessage(error)}`;
 
   console.error(message, error);
-  recordCloudSyncFailure(message);
+  recordCloudSyncFailure(message, resource);
 }
 
 function hasManualSortOrder(tasks: Task[]) {
@@ -126,8 +127,9 @@ export function TaskBoard() {
   const [activeRequirementKind, setActiveRequirementKind] = useState<RequirementKind | null>(null);
   const savedTasksRef = useRef<Task[]>([]);
   const isManualSortEnabledRef = useRef(false);
+  const cloudRefreshRef = useRef<Promise<void> | null>(null);
 
-  function applySavedTasks(tasks: Task[], manualSortEnabled = isManualSortEnabledRef.current) {
+  const applySavedTasks = useCallback((tasks: Task[], manualSortEnabled = isManualSortEnabledRef.current) => {
     const nextManualSortEnabled = manualSortEnabled && tasks.length > 0;
     const nextTasks = normalizeTaskList(tasks, nextManualSortEnabled);
 
@@ -138,7 +140,7 @@ export function TaskBoard() {
     setManualTaskSortEnabledInStorage(nextManualSortEnabled);
 
     return nextTasks;
-  }
+  }, []);
 
   function commitSavedTasks(
     updater: Task[] | ((currentTasks: Task[]) => Task[]),
@@ -150,42 +152,48 @@ export function TaskBoard() {
     return applySavedTasks(nextTasks, manualSortEnabled);
   }
 
-  async function pullRequirementFromCloud(kind: RequirementKind, forceCloud = false) {
-    const localText = loadRequirementText(kind);
-    const cloudRequirement = await fetchCloudRequirement(kind);
-    const hasInitialized = isRequirementCloudInitializedInStorage(kind);
-
-    if (forceCloud || cloudRequirement.content.trim() || hasInitialized || !localText.trim()) {
-      saveRequirementText(kind, cloudRequirement.content);
-    } else {
-      await pushRequirementTextToCloud(kind, localText);
-    }
-
-    setRequirementCloudInitializedInStorage(kind, true);
-  }
-
-  async function pullTasksFromCloud(forceCloud = false) {
+  const pullTasksFromCloud = useCallback(async (forceCloud = false) => {
+    const revision = getTaskSyncRevision();
     const cloudTasks = await fetchCloudTasks();
+    if (getTaskSyncRevision() !== revision || hasPendingCloudTaskChanges()) return;
     const localTasks = savedTasksRef.current;
     const hasInitialized = isTaskCloudInitializedInStorage();
 
     if (forceCloud || cloudTasks.length > 0 || hasInitialized || localTasks.length === 0) {
       applySavedTasks(cloudTasks, hasManualSortOrder(cloudTasks));
     } else {
-      await replaceCloudTaskList(localTasks);
+      // A cached list alone is not evidence that deleted cloud tasks should be recreated.
+      return;
     }
 
     setTaskCloudInitializedInStorage(true);
-  }
+  }, [applySavedTasks]);
 
-  async function pullAllCloudData(forceCloud = false) {
-    await pullTasksFromCloud(forceCloud);
-    await Promise.all([
-      pullRequirementFromCloud("exam", forceCloud),
-      pullRequirementFromCloud("course", forceCloud),
-    ]);
-    recordCloudSyncSuccess();
-  }
+  const pullAllCloudData = useCallback((forceCloud = false): Promise<void> => {
+    if (cloudRefreshRef.current) return cloudRefreshRef.current;
+    const operations = [
+      { resource: "tasks", run: () => pullTasksFromCloud(forceCloud) },
+      { resource: "exam", run: () => refreshRequirementFromCloud("exam", forceCloud) },
+      { resource: "course", run: () => refreshRequirementFromCloud("course", forceCloud) },
+    ];
+    cloudRefreshRef.current = (async () => {
+      const results = await Promise.allSettled(operations.map(async ({ resource, run }) => {
+        try {
+          await run();
+          recordCloudSyncSuccess(resource);
+        } catch (error) {
+          recordCloudSyncError(error, resource);
+          throw error;
+        }
+      }));
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length) {
+        throw new Error(failures.map((result) => getCloudSyncErrorMessage(result.reason)).join("；"));
+      }
+      recordCloudSyncSuccess();
+    })().finally(() => { cloudRefreshRef.current = null; });
+    return cloudRefreshRef.current;
+  }, [pullTasksFromCloud]);
 
   async function pushLocalDataToCloud() {
     await replaceCloudTaskList(loadTasksFromStorage());
@@ -203,9 +211,9 @@ export function TaskBoard() {
     try {
       await upsertCloudTask(task);
       setTaskCloudInitializedInStorage(true);
-      recordCloudSyncSuccess();
+      recordCloudSyncSuccess("tasks");
     } catch (error) {
-      recordCloudSyncError(error);
+      recordCloudSyncError(error, "tasks");
     }
   }
 
@@ -213,9 +221,9 @@ export function TaskBoard() {
     try {
       await syncCloudTaskList(tasks);
       setTaskCloudInitializedInStorage(true);
-      recordCloudSyncSuccess();
+      recordCloudSyncSuccess("tasks");
     } catch (error) {
-      recordCloudSyncError(error);
+      recordCloudSyncError(error, "tasks");
     }
   }
 
@@ -223,18 +231,16 @@ export function TaskBoard() {
     try {
       await deleteCloudTask(taskId);
       setTaskCloudInitializedInStorage(true);
-      recordCloudSyncSuccess();
+      recordCloudSyncSuccess("tasks");
     } catch (error) {
-      recordCloudSyncError(error);
+      recordCloudSyncError(error, "tasks");
     }
   }
 
   useEffect(() => {
     applySavedTasks(loadTasksFromStorage(), isManualTaskSortEnabledInStorage());
-    void pullAllCloudData().catch(recordCloudSyncError);
-    // 初始同步只需要在页面加载时执行一次，后续修改由各个保存/删除 handler 主动同步。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return startCloudSyncLifecycle(() => pullAllCloudData(), () => undefined);
+  }, [applySavedTasks, pullAllCloudData]);
 
   function handleAnalyze(tasks: Task[]) {
     setPendingTasks(tasks);

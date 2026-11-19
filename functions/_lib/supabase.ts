@@ -3,6 +3,7 @@ import type { Task, TaskStatus } from "../../src/types/task";
 export type SupabaseEnv = {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   SUPABASE_URL?: string;
+  NEXT_PUBLIC_SUPABASE_URL?: string;
 };
 
 type SupabaseTaskRow = {
@@ -52,6 +53,8 @@ export function createJsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store, max-age=0",
+      "CDN-Cache-Control": "no-store",
     },
     status,
   });
@@ -60,6 +63,7 @@ export function createJsonResponse(data: unknown, status = 200) {
 function sanitizeErrorText(text: string) {
   return text
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/sb_secret_[A-Za-z0-9_-]+/g, "[redacted]")
     .replace(/("apikey"\s*:\s*")[^"]+(")/gi, "$1[redacted]$2")
     .replace(/("api[_-]?key"\s*:\s*")[^"]+(")/gi, "$1[redacted]$2")
     .replace(/(api[_-]?key=)[^&\s]+/gi, "$1[redacted]")
@@ -95,8 +99,8 @@ async function readSafeErrorSummary(response: Response) {
 }
 
 function getSupabaseConfig(env: SupabaseEnv) {
-  const supabaseUrl = env.SUPABASE_URL?.replace(/\/+$/, "");
-  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = (env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL)?.trim().replace(/\/+$/, "");
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
   if (!supabaseUrl) {
     throw new SupabaseConfigError("缺少 SUPABASE_URL");
@@ -104,6 +108,19 @@ function getSupabaseConfig(env: SupabaseEnv) {
 
   if (!serviceRoleKey) {
     throw new SupabaseConfigError("缺少 SUPABASE_SERVICE_ROLE_KEY");
+  }
+
+  if (serviceRoleKey.startsWith("sb_publishable_")) {
+    throw new SupabaseConfigError("SUPABASE_SERVICE_ROLE_KEY 需要填写服务端 Secret key，不能使用 Publishable key");
+  }
+
+  try {
+    const url = new URL(supabaseUrl);
+    if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+      throw new Error("Invalid protocol");
+    }
+  } catch {
+    throw new SupabaseConfigError("SUPABASE_URL 格式不正确，请填写完整项目 URL");
   }
 
   return {
@@ -121,16 +138,29 @@ async function requestSupabase<T>(
   const headers = new Headers(init.headers);
 
   headers.set("apikey", serviceRoleKey);
-  headers.set("Authorization", `Bearer ${serviceRoleKey}`);
+  // Only legacy service_role keys are JWTs; sb_secret keys use the apikey header.
+  if (serviceRoleKey.startsWith("eyJ")) {
+    headers.set("Authorization", `Bearer ${serviceRoleKey}`);
+  }
 
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${restUrl}${path}`, {
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${restUrl}${path}`, {
+      ...init,
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(12000),
+    });
+  } catch (error) {
+    const timeout = error instanceof Error && /abort|timeout/i.test(error.name);
+    throw new SupabaseHttpError(503, timeout
+      ? "连接 Supabase 超时，请检查项目状态和网络"
+      : "无法连接 Supabase，请检查项目是否已暂停、项目 URL 和网络连接");
+  }
 
   if (!response.ok) {
     throw new SupabaseHttpError(response.status, await readSafeErrorSummary(response));
@@ -271,7 +301,7 @@ export function readRequirementKind(value: string | null) {
 export async function getRequirementNote(env: SupabaseEnv, type: RequirementKind) {
   const rows = await requestSupabase<RequirementNoteRow[]>(
     env,
-    `/requirement_notes?select=id,type,content,created_at,updated_at&type=eq.${type}&limit=1`,
+    `/requirement_notes?select=id,type,content,created_at,updated_at&type=eq.${type}&order=updated_at.desc&limit=1`,
   );
   const row = rows[0];
 

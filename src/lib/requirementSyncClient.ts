@@ -1,6 +1,12 @@
 "use client";
 
-import type { RequirementKind } from "@/lib/requirementStorage";
+import {
+  loadRequirementText,
+  saveRequirementText,
+  type RequirementKind,
+} from "@/lib/requirementStorage";
+import { cloudSyncRequest } from "@/lib/cloudSyncRequest";
+import { createCloudSyncQueue } from "@/lib/cloudSyncQueue";
 
 type RequirementResponse = {
   content: string;
@@ -8,40 +14,34 @@ type RequirementResponse = {
   updatedAt: string | null;
 };
 
-async function readApiResponse(response: Response) {
-  const contentType = response.headers.get("content-type") ?? "";
-
-  if (contentType.includes("application/json")) {
-    return (await response.json()) as { error?: unknown; message?: unknown };
-  }
-
-  const text = await response.text();
-
-  return text ? { error: text } : {};
+function createRequirementQueue(kind: RequirementKind) {
+  return createCloudSyncQueue(
+    `agenda_generate_${kind}_requirements_pending_sync`,
+    (value): value is string => typeof value === "string",
+    (content) => cloudSyncRequest<RequirementResponse>(
+      content.trim() ? "/api/requirements" : `/api/requirements?type=${kind}`,
+      content.trim()
+        ? {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: kind, content }),
+          }
+        : { method: "DELETE" },
+    ),
+  );
 }
 
-function getResponseMessage(data: { error?: unknown; message?: unknown }) {
-  if (typeof data.error === "string" && data.error.trim()) {
-    return data.error;
-  }
+const queues = {
+  exam: createRequirementQueue("exam"),
+  course: createRequirementQueue("course"),
+};
 
-  if (typeof data.message === "string" && data.message.trim()) {
-    return data.message;
-  }
-
-  return "未知错误";
+export function getRequirementSyncRevision(kind: RequirementKind) {
+  return queues[kind].getRevision();
 }
 
-async function requestJson<T>(path: string, init: RequestInit = {}) {
-  const method = init.method ?? "GET";
-  const response = await fetch(path, init);
-  const data = await readApiResponse(response);
-
-  if (!response.ok) {
-    throw new Error(`${method} ${path} 返回 ${response.status}：${getResponseMessage(data)}`);
-  }
-
-  return data as T;
+export function hasPendingCloudRequirementChanges(kind: RequirementKind) {
+  return queues[kind].hasPending();
 }
 
 function getLocalStorage() {
@@ -94,32 +94,39 @@ export function setRequirementCloudInitializedInStorage(
 }
 
 export async function fetchCloudRequirement(kind: RequirementKind) {
-  return requestJson<RequirementResponse>(`/api/requirements?type=${kind}`);
+  await queues[kind].flush();
+  const data = await cloudSyncRequest<RequirementResponse>(`/api/requirements?type=${kind}`);
+  if (!data || data.type !== kind || typeof data.content !== "string" ||
+    (data.updatedAt !== null && typeof data.updatedAt !== "string")) {
+    throw new Error(`GET /api/requirements?type=${kind} 返回的要求格式不正确`);
+  }
+  return data;
 }
 
-export async function saveCloudRequirement(kind: RequirementKind, content: string) {
-  return requestJson<RequirementResponse>("/api/requirements", {
-    body: JSON.stringify({
-      content,
-      type: kind,
-    }),
-    headers: {
-      "Content-Type": "application/json",
-    },
-    method: "POST",
-  });
+export function saveCloudRequirement(kind: RequirementKind, content: string) {
+  return queues[kind].enqueue([content]);
 }
 
-export async function clearCloudRequirement(kind: RequirementKind) {
-  return requestJson<RequirementResponse>(`/api/requirements?type=${kind}`, {
-    method: "DELETE",
-  });
+export function clearCloudRequirement(kind: RequirementKind) {
+  return queues[kind].enqueue([""]);
 }
 
-export async function pushRequirementTextToCloud(kind: RequirementKind, content: string) {
-  if (!content.trim()) {
-    return clearCloudRequirement(kind);
+export function pushRequirementTextToCloud(kind: RequirementKind, content: string) {
+  return queues[kind].enqueue([content]);
+}
+
+export async function refreshRequirementFromCloud(kind: RequirementKind, forceCloud = false) {
+  const revision = queues[kind].getRevision();
+  const data = await fetchCloudRequirement(kind);
+  if (queues[kind].getRevision() !== revision || queues[kind].hasPending()) return;
+
+  const localText = loadRequirementText(kind);
+  if (!forceCloud && !data.updatedAt && !data.content && localText &&
+    !isRequirementCloudInitializedInStorage(kind)) {
+    // Keep pre-sync local data for an explicit upload; never resurrect deleted cloud content.
+    return;
   }
 
-  return saveCloudRequirement(kind, content);
+  saveRequirementText(kind, data.content);
+  setRequirementCloudInitializedInStorage(kind, true);
 }

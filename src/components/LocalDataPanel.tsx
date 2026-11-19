@@ -41,10 +41,13 @@ export function LocalDataPanel({ onPullCloudData, onPushCloudData }: LocalDataPa
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>(() => readCloudSyncStatus());
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>({ lastFailure: "", lastSuccessAt: "" });
 
   useEffect(() => {
-    return subscribeCloudSyncStatus(() => setSyncStatus(readCloudSyncStatus()));
+    const updateStatus = () => setSyncStatus(readCloudSyncStatus());
+    updateStatus();
+    return subscribeCloudSyncStatus(updateStatus);
   }, []);
 
   function handleExport() {
@@ -61,6 +64,8 @@ export function LocalDataPanel({ onPullCloudData, onPushCloudData }: LocalDataPa
   }
 
   async function handlePullCloudData() {
+    if (isSyncing) return;
+    setIsSyncing(true);
     setError("");
     setMessage("");
 
@@ -77,10 +82,14 @@ export function LocalDataPanel({ onPullCloudData, onPushCloudData }: LocalDataPa
       recordCloudSyncFailure(`云端同步失败，已保存在本地：${message}`);
       setSyncStatus(readCloudSyncStatus());
       setError(`云端同步失败，已保存在本地：${message}`);
+    } finally {
+      setIsSyncing(false);
     }
   }
 
   async function handlePushCloudData() {
+    if (isSyncing || !window.confirm("上传本机数据会替换云端的待办和要求，请确认本机数据完整后继续。")) return;
+    setIsSyncing(true);
     setError("");
     setMessage("");
 
@@ -97,6 +106,8 @@ export function LocalDataPanel({ onPullCloudData, onPushCloudData }: LocalDataPa
       recordCloudSyncFailure(`云端同步失败，已保存在本地：${message}`);
       setSyncStatus(readCloudSyncStatus());
       setError(`云端同步失败，已保存在本地：${message}`);
+    } finally {
+      setIsSyncing(false);
     }
   }
 
@@ -136,7 +147,7 @@ export function LocalDataPanel({ onPullCloudData, onPushCloudData }: LocalDataPa
           <p className={styles.label}>LocalStorage + Supabase</p>
           <h2 id="local-data-title">数据备份与同步</h2>
         </div>
-        <span className={styles.badge}>云端同步已启用</span>
+        <span className={styles.badge}>{syncStatus.lastFailure ? "同步异常" : "云端同步已启用"}</span>
       </div>
 
       <p className={styles.description}>
@@ -164,6 +175,7 @@ export function LocalDataPanel({ onPullCloudData, onPushCloudData }: LocalDataPa
       <div className={styles.actions}>
         <button
           className={styles.primaryButton}
+          disabled={isSyncing}
           onClick={() => void handlePullCloudData()}
           type="button"
         >
@@ -171,6 +183,7 @@ export function LocalDataPanel({ onPullCloudData, onPushCloudData }: LocalDataPa
         </button>
         <button
           className={styles.secondaryButton}
+          disabled={isSyncing}
           onClick={() => void handlePushCloudData()}
           type="button"
         >

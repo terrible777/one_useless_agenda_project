@@ -1,6 +1,6 @@
 # AI 待办助手
 
-移动端优先的 PWA 待办工具，面向高校教务场景。当前版本使用 Cloudflare Pages 托管静态页面和 Pages Functions，DeepSeek API Key 与 Supabase service role key 都只在服务端环境变量中读取。
+移动端优先的 PWA 待办工具，面向高校教务场景。支持 Cloudflare Pages 和 Vercel 两种部署；DeepSeek API Key 与 Supabase service role key 都只在服务端环境变量中读取。
 
 ## 当前架构
 
@@ -8,12 +8,12 @@
 浏览器
   ├─ localStorage：本地缓存、离线兜底、导入导出备份
   └─ /api/*
-      ├─ Cloudflare Pages Functions：AI 接口、同步接口
+      ├─ Cloudflare Pages Functions / Next.js API：AI 接口、同步接口
       ├─ DeepSeek：待办 / 排考 / 排课 AI 整理
       └─ Supabase：待办和排考 / 排课云端存储
 ```
 
-电脑和手机访问同一个 Cloudflare Pages 地址时，会通过 Supabase 同步同一份待办、排考要求和排课要求。当前版本不做登录、不做 Supabase Auth、不做同步密钥保护。
+电脑和手机访问同一个部署地址时，会通过 Supabase 同步同一份待办、排考要求和排课要求。当前版本不做登录、不做 Supabase Auth、不做同步密钥保护。
 
 ## 本地开发
 
@@ -35,11 +35,20 @@ npm run dev
 http://localhost:3000
 ```
 
-本地 `next dev` 适合调前端页面。Cloudflare Pages Functions 在正式部署后由 Cloudflare 运行；本地如果只调 UI，可以设置：
+本地 `next dev` 会同时运行页面和 Next.js API 兼容入口，读取 `.env.local`。如果暂时没有 DeepSeek 配置，可以设置：
 
 ```env
 NEXT_PUBLIC_USE_MOCK_AI=true
 ```
+
+如果要验证 Cloudflare Pages Functions 的实际运行方式，先执行 `npm run build`，将服务端环境变量放到项目根目录的 `.dev.vars`（不要提交），然后运行：
+
+```bash
+npx wrangler@4 pages dev out --port 8788
+```
+
+通过 `http://localhost:8788` 测试 Cloudflare 版本。`localhost:3000` 使用 Next.js API，二者复用同一套数据库和 AI 处理代码。
+参考 [Cloudflare Pages 本地运行文档](https://developers.cloudflare.com/pages/functions/local-development/)。
 
 ## 环境变量
 
@@ -60,6 +69,9 @@ SUPABASE_SERVICE_ROLE_KEY=你的 Supabase service_role secret key
 - `DEEPSEEK_API_KEY` 只在 Cloudflare Pages Functions 中读取，不会暴露到前端。
 - `SUPABASE_SERVICE_ROLE_KEY` 只在 Cloudflare Pages Functions 中读取，不要提交到 GitHub。
 - 不需要 `NEXT_PUBLIC_SUPABASE_URL` 或 `NEXT_PUBLIC_SUPABASE_ANON_KEY`。
+- `SUPABASE_URL` 兼容读取旧的 `NEXT_PUBLIC_SUPABASE_URL`，推荐部署时统一使用前者。
+- `SUPABASE_SERVICE_ROLE_KEY` 可以填写新版 `sb_secret_...` Secret key 或旧版 `service_role` JWT；两者都只用于服务端。
+- 新版 Secret key 通过 `apikey` 请求头发送，旧版 JWT 才使用 `Authorization: Bearer`，见 [Supabase API Key 文档](https://supabase.com/docs/guides/getting-started/api-keys)。
 - 当前版本不使用 Supabase Auth，也不需要登录系统。
 
 ## Supabase 建表
@@ -141,9 +153,24 @@ SUPABASE_SERVICE_ROLE_KEY=
 
 部署后不需要运行 `npm run dev`。Cloudflare Pages 会托管 `out` 中的静态页面，并自动挂载 `functions/api/*` 下的 AI 和 Supabase 同步接口。
 
+## Vercel 兼容部署
+
+继续使用原来的 Vercel 生产网址时，将本次修复推送到已连接的 GitHub 仓库。仓库中的 `vercel.json` 会选择 `npm run build:vercel`，使用 Next.js 服务端构建；不要把 Vercel 的输出目录固定成 `out`。
+
+Vercel Production 环境配置与上面相同的 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`SUPABASE_URL` 和 `SUPABASE_SERVICE_ROLE_KEY`。旧的 `NEXT_PUBLIC_SUPABASE_URL` 仍兼容读取。修改环境变量后重新部署。
+
+本地检查 Vercel 构建：
+
+```bash
+npm run build:vercel
+npm run start
+```
+
+`src/pages/api/` 是 Vercel / Next.js 入口，转交给 `functions/api/` 的同一套处理逻辑。Cloudflare 继续运行 `npm run build` 导出 `out`，保持原来的部署方式；两种平台均由服务端访问 Supabase，Key 不会进入前端。
+
 ## API Route
 
-Cloudflare Pages Functions 提供：
+Cloudflare Pages Functions 和 Next.js API 提供相同接口：
 
 - `POST /api/analyze`：DeepSeek 待办分析。
 - `POST /api/exam-requirements`：DeepSeek 排考要求整理。
@@ -175,6 +202,12 @@ Cloudflare Pages Functions 提供：
 6. 对排考要求、排课要求重复同样流程。
 
 如果同步失败，页面底部会显示具体错误。本地数据仍会保存在浏览器 `localStorage` 中。
+
+页面可见时每 30 秒刷新一次云端数据；切回应用、窗口重新获得焦点或网络恢复时会立即检查。上传失败的修改保存在本地待同步队列，刷新和恢复网络后先重试上传，再拉取云端，避免旧数据覆盖尚未上传的修改。同一设备的写入按顺序发送，防止连续编辑或拖动时旧请求覆盖新内容。
+
+首次启用同步时，如果云端为空但本机有历史内容，不会自动把缓存回填到云端；确认本机数据完整后使用“上传本机数据”迁移。已初始化设备会接受云端空列表，防止已删除的数据重新出现。
+
+排查部署问题时，分别访问部署地址的 `/api/tasks` 和 `/api/requirements?type=exam`：应该返回 JSON。404 或 HTML 通常表示 Pages Functions 未部署；503 表示环境变量未配置；Supabase 401 表示 Key 有问题；连接失败时检查 Supabase Dashboard 中项目是否已暂停、URL 是否正确。电脑和手机应访问同一生产部署地址，并连接同一个 Supabase 项目。
 
 ## 数据备份
 

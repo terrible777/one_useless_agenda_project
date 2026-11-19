@@ -4,6 +4,7 @@ const STORAGE_KEYS: Record<RequirementKind, string> = {
   course: "agenda_generate_course_requirements",
   exam: "agenda_generate_exam_requirements",
 };
+const REQUIREMENT_STORAGE_EVENT = "agenda_generate_requirements_changed";
 
 function getLocalStorage() {
   if (typeof window === "undefined") {
@@ -36,10 +37,27 @@ export function saveRequirementText(kind: RequirementKind, text: string) {
   }
 
   try {
+    if (localStorage.getItem(STORAGE_KEYS[kind]) === text) return;
     localStorage.setItem(STORAGE_KEYS[kind], text);
+    window.dispatchEvent(new CustomEvent(REQUIREMENT_STORAGE_EVENT, { detail: kind }));
   } catch (error) {
     console.error("保存要求整理 localStorage 失败。", error);
   }
+}
+
+export function subscribeRequirementText(kind: RequirementKind, listener: () => void) {
+  function onChange(event: Event) {
+    if ((event as CustomEvent<RequirementKind>).detail === kind) listener();
+  }
+  function onStorage(event: StorageEvent) {
+    if (event.key === STORAGE_KEYS[kind]) listener();
+  }
+  window.addEventListener(REQUIREMENT_STORAGE_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(REQUIREMENT_STORAGE_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 export function clearRequirementText(kind: RequirementKind) {

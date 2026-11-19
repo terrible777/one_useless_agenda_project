@@ -24,7 +24,7 @@ function readOptionalNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function parseTask(value: unknown): Task | null {
+export function parseTask(value: unknown): Task | null {
   if (!isRecord(value)) {
     return null;
   }

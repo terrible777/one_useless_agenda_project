@@ -1,44 +1,70 @@
 "use client";
 
 import type { Task } from "@/types/task";
+import { parseTask } from "@/lib/taskStorage";
+import { cloudSyncRequest } from "@/lib/cloudSyncRequest";
+import { createCloudSyncQueue } from "@/lib/cloudSyncQueue";
 
 const TASK_CLOUD_INITIALIZED_KEY = "agenda_generate_tasks_cloud_initialized";
 
-async function readApiResponse(response: Response) {
-  const contentType = response.headers.get("content-type") ?? "";
+type TaskChange =
+  | { type: "upsert"; task: Task }
+  | { type: "delete"; id: string }
+  | { type: "replace"; tasks: Task[] };
 
-  if (contentType.includes("application/json")) {
-    return (await response.json()) as { error?: unknown; message?: unknown };
-  }
-
-  const text = await response.text();
-
-  return text ? { error: text } : {};
+function isTaskChange(value: unknown): value is TaskChange {
+  if (typeof value !== "object" || !value) return false;
+  const change = value as Partial<TaskChange>;
+  if (change.type === "upsert") return parseTask(change.task) !== null;
+  if (change.type === "delete") return typeof change.id === "string";
+  return change.type === "replace" && Array.isArray(change.tasks) &&
+    change.tasks.every((task) => parseTask(task) !== null);
 }
 
-function getResponseMessage(data: { error?: unknown; message?: unknown }) {
-  if (typeof data.error === "string" && data.error.trim()) {
-    return data.error;
-  }
-
-  if (typeof data.message === "string" && data.message.trim()) {
-    return data.message;
-  }
-
-  return "未知错误";
+function postTask(task: Task) {
+  return cloudSyncRequest<Task>("/api/tasks", {
+    body: JSON.stringify(task),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
 }
 
-async function requestJson<T>(path: string, init: RequestInit = {}) {
-  const method = init.method ?? "GET";
-  const response = await fetch(path, init);
-  const data = await readApiResponse(response);
-
-  if (!response.ok) {
-    throw new Error(`${method} ${path} 返回 ${response.status}：${getResponseMessage(data)}`);
+async function sendChange(change: TaskChange) {
+  if (change.type === "upsert") return postTask(change.task);
+  if (change.type === "delete") {
+    return cloudSyncRequest(`/api/tasks?id=${encodeURIComponent(change.id)}`, { method: "DELETE" });
+  }
+  if (change.tasks.length === 0) {
+    return cloudSyncRequest("/api/tasks/clear", { method: "DELETE" });
   }
 
-  return data as T;
+  // Write the replacement first so an upload failure cannot empty the cloud table.
+  for (const task of change.tasks) await postTask(task);
+  const cloudTasks = await readCloudTasks();
+  const keepIds = new Set(change.tasks.map((task) => task.id));
+  for (const task of cloudTasks) {
+    if (!keepIds.has(task.id)) {
+      await cloudSyncRequest(`/api/tasks?id=${encodeURIComponent(task.id)}`, { method: "DELETE" });
+    }
+  }
 }
+
+const pendingTasks = createCloudSyncQueue(
+  "agenda_generate_tasks_pending_sync",
+  isTaskChange,
+  sendChange,
+);
+
+async function readCloudTasks() {
+  const data = await cloudSyncRequest<unknown>("/api/tasks");
+  if (!Array.isArray(data)) throw new Error("GET /api/tasks 返回的任务列表格式不正确");
+  const tasks = data.map(parseTask);
+  if (tasks.some((task) => task === null)) throw new Error("GET /api/tasks 包含无效任务");
+  return tasks as Task[];
+}
+
+export const hasPendingCloudTaskChanges = pendingTasks.hasPending;
+export const getTaskSyncRevision = pendingTasks.getRevision;
 
 function getLocalStorage() {
   if (typeof window === "undefined") {
@@ -83,36 +109,26 @@ export function setTaskCloudInitializedInStorage(isInitialized: boolean) {
 }
 
 export async function fetchCloudTasks() {
-  return requestJson<Task[]>("/api/tasks");
+  await pendingTasks.flush();
+  return readCloudTasks();
 }
 
-export async function upsertCloudTask(task: Task) {
-  return requestJson<Task>("/api/tasks", {
-    body: JSON.stringify(task),
-    headers: {
-      "Content-Type": "application/json",
-    },
-    method: "POST",
-  });
+export function upsertCloudTask(task: Task) {
+  return pendingTasks.enqueue([{ type: "upsert", task }]);
 }
 
-export async function deleteCloudTask(taskId: string) {
-  return requestJson<{ ok: true }>(`/api/tasks?id=${encodeURIComponent(taskId)}`, {
-    method: "DELETE",
-  });
+export function deleteCloudTask(taskId: string) {
+  return pendingTasks.enqueue([{ type: "delete", id: taskId }]);
 }
 
-export async function clearCloudTasks() {
-  return requestJson<{ ok: true }>("/api/tasks/clear", {
-    method: "DELETE",
-  });
+export function clearCloudTasks() {
+  return pendingTasks.enqueue([{ type: "replace", tasks: [] }]);
 }
 
-export async function syncCloudTaskList(tasks: Task[]) {
-  await Promise.all(tasks.map((task) => upsertCloudTask(task)));
+export function syncCloudTaskList(tasks: Task[]) {
+  return pendingTasks.enqueue(tasks.map((task) => ({ type: "upsert", task })));
 }
 
-export async function replaceCloudTaskList(tasks: Task[]) {
-  await clearCloudTasks();
-  await syncCloudTaskList(tasks);
+export function replaceCloudTaskList(tasks: Task[]) {
+  return pendingTasks.enqueue([{ type: "replace", tasks }]);
 }
